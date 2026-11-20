@@ -1,0 +1,8 @@
+{
+  "name": "KodSavod — Kompyuter Savodxonligi va Dasturlash Asoslari",
+  "description": "Kompyuter savodxonligi va dasturlash asoslarini noldan o‘rgatuvchi interaktiv o‘quv platformasi: mini-darslar, mantiqiy mashqlar va 20 ta savollik yakuniy imtihon.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
