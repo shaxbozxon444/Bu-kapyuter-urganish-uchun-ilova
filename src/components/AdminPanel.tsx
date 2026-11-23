@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import {
   ArrowLeft,
+  Award,
   BookA,
   BookOpen,
   CheckCircle2,
@@ -19,8 +20,10 @@ import {
   Trophy,
   Video,
   X,
+  XCircle,
 } from 'lucide-react';
 import type {
+  CertificateRecord,
   DidYouKnowItem,
   ExamQuestion,
   GlossaryTerm,
@@ -29,7 +32,8 @@ import type {
   VideoLessonItem,
   VideoVisualType,
 } from '../data/curriculum';
-import type { ExamAttemptRecord } from './FinalExamSection';
+import { CertificatePreviewModal } from './CertificatePreviewModal';
+import type { ExamAttemptRecord, ExamScope } from './FinalExamSection';
 
 type AdminTab =
   | 'overview'
@@ -39,6 +43,7 @@ type AdminTab =
   | 'exam'
   | 'glossary'
   | 'results'
+  | 'certificates'
   | 'settings';
 
 interface AdminPanelProps {
@@ -48,6 +53,9 @@ interface AdminPanelProps {
   examQuestions: ExamQuestion[];
   glossaryTerms: GlossaryTerm[];
   examResults: ExamAttemptRecord[];
+  issuedCertificates: CertificateRecord[];
+  examAttempts: Record<ExamScope, number>;
+  maxAttempts: number;
   isDark: boolean;
   onToggleTheme: () => void;
   onSaveVideoLessons: (next: VideoLessonItem[]) => void;
@@ -55,6 +63,8 @@ interface AdminPanelProps {
   onSaveDidYouKnow: (next: DidYouKnowItem[]) => void;
   onSaveExamQuestions: (next: ExamQuestion[]) => void;
   onSaveGlossary: (next: GlossaryTerm[]) => void;
+  onSaveCertificates: (next: CertificateRecord[]) => void;
+  onResetExamAttempts: (scope?: ExamScope) => void;
   onClearResults: () => void;
   onResetDefaults: () => void;
   onExitAdmin: () => void;
@@ -69,6 +79,7 @@ const TAB_LABELS: Record<AdminTab, string> = {
   exam: 'Test savollari',
   glossary: 'IT Lug‘at atamalari',
   results: 'Imtihon natijalari',
+  certificates: 'Sertifikatlar chiqarish',
   settings: 'Sozlamalar va zaxira',
 };
 
@@ -76,10 +87,12 @@ const VIDEO_VISUAL_LABELS: Record<VideoVisualType, string> = {
   hardware: 'Kompyuter qismlari (CPU / RAM / SSD)',
   files: 'Fayllar va kengaytmalar',
   shortcuts: 'Klaviatura tezkor tugmalari',
+  network: 'Internet, DNS va Bulutli xotira',
   security: 'Internet xavfsizligi va Fishing',
   binary: '0 va 1 ikkilik kod animatsiyasi',
   algorithm: 'Algoritm qadamlari',
   ifelse: 'Agar / Aks holda qaror mantiqi',
+  functions: 'Funksiya, Parametr va Return',
   loops_web: 'Sikl va HTML / CSS / JS',
 };
 
@@ -89,11 +102,15 @@ const WIDGET_LABELS: Record<LessonItem['widgetType'], string> = {
   files: 'Fayl kengaytmalari ko‘rsatkichi',
   shortcuts: 'Klaviatura tezkor tugmalari',
   office: 'Mini Excel (=SUM) formulasi',
+  network: 'DNS va IP manzil simulyatori',
   security: 'Parol mustahkamligi tekshiruvi',
+  ai: 'AI Prompt sifat tekshiruvi',
   binary: '0 va 1 ikkilik kod tarjimoni',
   algorithm: 'Algoritm qadamlari simulyatori',
+  datatypes: 'Ma’lumot turlari (String / Number / Boolean)',
   ifelse: 'Agar / Aks holda jonli kodi',
   loops: 'Sikl (for) va Ro‘yxat simulyatori',
+  functions: 'Funksiya (Parametr va Return) mashinasi',
   webarch: 'Frontend / API / Backend oqimi',
   languages: 'Dasturlash tillari taqqoslagichi',
 };
@@ -105,6 +122,9 @@ export function AdminPanel({
   examQuestions,
   glossaryTerms,
   examResults,
+  issuedCertificates,
+  examAttempts,
+  maxAttempts,
   isDark,
   onToggleTheme,
   onSaveVideoLessons,
@@ -112,6 +132,8 @@ export function AdminPanel({
   onSaveDidYouKnow,
   onSaveExamQuestions,
   onSaveGlossary,
+  onSaveCertificates,
+  onResetExamAttempts,
   onClearResults,
   onResetDefaults,
   onExitAdmin,
@@ -123,6 +145,12 @@ export function AdminPanel({
   const [confirmReset, setConfirmReset] = useState(false);
   const [confirmClearResults, setConfirmClearResults] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | number | null>(null);
+
+  // Certificate issue & preview state
+  const [certIssueAttempt, setCertIssueAttempt] = useState<ExamAttemptRecord | null>(null);
+  const [certStudentName, setCertStudentName] = useState('');
+  const [certIssuerName, setCertIssuerName] = useState('Murodillayev · murodillayev_dev');
+  const [previewCertificate, setPreviewCertificate] = useState<CertificateRecord | null>(null);
 
   // Lesson modal state
   const [lessonModalOpen, setLessonModalOpen] = useState(false);
@@ -150,7 +178,14 @@ export function AdminPanel({
   // DYK modal state
   const [dykModalOpen, setDykModalOpen] = useState(false);
   const [editingDyk, setEditingDyk] = useState<DidYouKnowItem | null>(null);
-  const [dykForm, setDykForm] = useState({
+  const [dykForm, setDykForm] = useState<{
+    category: LessonCategory;
+    topic: string;
+    question: string;
+    hint: string;
+    answer: string;
+  }>({
+    category: 'literacy',
     topic: '',
     question: '',
     hint: '',
@@ -244,6 +279,76 @@ export function AdminPanel({
     setActiveTab(tab);
     setSearchQuery('');
     setCategoryFilter('all');
+    setDeleteConfirmId(null);
+  };
+
+  // --- Certificate Helpers ---
+  const isResultPassed = (r: ExamAttemptRecord) =>
+    typeof r.passed === 'boolean'
+      ? r.passed
+      : r.tier !== 'retry' && r.total > 0 && r.score / r.total >= 0.75;
+
+  const findExistingCertificate = (attemptId: string) =>
+    issuedCertificates.find((c) => c.attemptId === attemptId);
+
+  const openIssueCertificate = (attempt: ExamAttemptRecord) => {
+    const existing = findExistingCertificate(attempt.id);
+    if (existing) {
+      setPreviewCertificate(existing);
+      return;
+    }
+    setCertIssueAttempt(attempt);
+    setCertStudentName(attempt.studentName);
+    setCertIssuerName('Murodillayev · murodillayev_dev');
+  };
+
+  const handleConfirmIssueCertificate = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!certIssueAttempt) return;
+    const pct =
+      certIssueAttempt.total > 0
+        ? Math.round((certIssueAttempt.score / certIssueAttempt.total) * 100)
+        : 0;
+    const scope: ExamScope =
+      certIssueAttempt.examScope ??
+      (certIssueAttempt.literacyTotal > 0 && certIssueAttempt.programmingTotal > 0
+        ? 'all'
+        : certIssueAttempt.programmingTotal > 0
+          ? 'programming'
+          : 'literacy');
+    const trackTitle =
+      scope === 'programming'
+        ? 'Dasturlash asoslari'
+        : scope === 'all'
+          ? 'Kompyuter savodxonligi va Dasturlash asoslari'
+          : 'Kompyuter savodxonligi';
+    const gradeLabel =
+      certIssueAttempt.tier === 'perfect'
+        ? 'A’lo (100%)'
+        : certIssueAttempt.tier === 'great'
+          ? 'Yaxshi'
+          : 'Qoniqarli';
+    const randomCode = String(Math.floor(1000 + Math.random() * 9000));
+    const created: CertificateRecord = {
+      id: `MD-${new Date().getFullYear()}-${randomCode}`,
+      attemptId: certIssueAttempt.id,
+      studentName: certStudentName.trim() || certIssueAttempt.studentName,
+      scope,
+      trackTitle,
+      score: certIssueAttempt.score,
+      total: certIssueAttempt.total,
+      percentage: pct,
+      gradeLabel,
+      issuedAt: new Date().toISOString(),
+      issuerName: certIssuerName.trim() || 'murodillayev_dev',
+    };
+    onSaveCertificates([created, ...issuedCertificates]);
+    setCertIssueAttempt(null);
+    setPreviewCertificate(created);
+  };
+
+  const deleteCertificate = (id: string) => {
+    onSaveCertificates(issuedCertificates.filter((c) => c.id !== id));
     setDeleteConfirmId(null);
   };
 
@@ -407,13 +512,14 @@ export function AdminPanel({
   // --- DYK Handlers ---
   const openNewDyk = () => {
     setEditingDyk(null);
-    setDykForm({ topic: '', question: '', hint: '', answer: '' });
+    setDykForm({ category: 'literacy', topic: '', question: '', hint: '', answer: '' });
     setDykModalOpen(true);
   };
 
   const openEditDyk = (card: DidYouKnowItem) => {
     setEditingDyk(card);
     setDykForm({
+      category: card.category ?? 'literacy',
       topic: card.topic,
       question: card.question,
       hint: card.hint,
@@ -432,6 +538,7 @@ export function AdminPanel({
           c.id === editingDyk.id
             ? {
                 ...c,
+                category: dykForm.category,
                 topic: dykForm.topic.trim() || 'Mantiq',
                 question: dykForm.question.trim(),
                 hint: dykForm.hint.trim() || 'Darsdagi tushunchalarni eslang.',
@@ -445,6 +552,7 @@ export function AdminPanel({
         ...didYouKnowCards,
         {
           id: `dyk-${Date.now()}`,
+          category: dykForm.category,
           topic: dykForm.topic.trim() || 'Mantiq',
           question: dykForm.question.trim(),
           hint: dykForm.hint.trim() || 'Darsdagi tushunchalarni eslang.',
@@ -835,6 +943,7 @@ export function AdminPanel({
               { id: 'exam', label: 'Test savollari', icon: ClipboardList, count: examQuestions.length },
               { id: 'glossary', label: 'IT Lug‘at', icon: BookA, count: glossaryTerms.length },
               { id: 'results', label: 'Imtihon natijalari', icon: Trophy, count: examResults.length },
+              { id: 'certificates', label: 'Sertifikatlar', icon: Award, count: issuedCertificates.length },
               { id: 'settings', label: 'Sozlamalar', icon: Settings },
             ] as const
           ).map((item) => {
@@ -1830,6 +1939,33 @@ export function AdminPanel({
                 )}
               </div>
 
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 sm:p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                <div>
+                  <h2 className="text-sm font-semibold text-slate-900 dark:text-white">
+                    Imtihon imkoniyatlari nazorati (har bir yo‘nalishga {maxAttempts} marta)
+                  </h2>
+                  <div className="mt-2 flex flex-wrap items-center gap-4 text-xs font-mono tabular-nums text-slate-600 dark:text-slate-300">
+                    <span>
+                      Savodxonlik: {examAttempts.literacy ?? 0}/{maxAttempts}
+                    </span>
+                    <span>
+                      Dasturlash: {examAttempts.programming ?? 0}/{maxAttempts}
+                    </span>
+                    <span>
+                      Umumiy: {examAttempts.all ?? 0}/{maxAttempts}
+                    </span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onResetExamAttempts()}
+                  className="min-h-[40px] inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-800 dark:text-slate-100 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer self-start lg:self-auto"
+                >
+                  <RotateCcw className="w-3.5 h-3.5 shrink-0" />
+                  <span>Barcha imkoniyatlarni tiklash (3 ta)</span>
+                </button>
+              </div>
+
               <div className="relative max-w-md">
                 <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
@@ -1869,55 +2005,261 @@ export function AdminPanel({
                           <th className="py-3 px-4 whitespace-nowrap">Dasturlash</th>
                           <th className="py-3 px-4 whitespace-nowrap">Umumiy ball</th>
                           <th className="py-3 px-4 whitespace-nowrap">Daraja</th>
-                          <th className="py-3 px-4 text-right whitespace-nowrap">Sana</th>
+                          <th className="py-3 px-4 text-right whitespace-nowrap">Sertifikat</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-200 dark:divide-slate-800 text-sm">
-                        {filteredResults.map((r) => (
-                          <tr
-                            key={r.id}
-                            className="hover:bg-slate-50/80 dark:hover:bg-slate-800/50 transition-colors"
-                          >
-                            <td className="py-3 px-4 font-medium text-slate-900 dark:text-white">
-                              {r.studentName}
-                            </td>
-                            <td className="py-3 px-4 font-mono text-xs tabular-nums text-slate-700 dark:text-slate-300">
-                              {r.literacyScore} / {r.literacyTotal}
-                            </td>
-                            <td className="py-3 px-4 font-mono text-xs tabular-nums text-slate-700 dark:text-slate-300">
-                              {r.programmingScore} / {r.programmingTotal}
-                            </td>
-                            <td className="py-3 px-4 font-mono font-semibold tabular-nums text-slate-900 dark:text-white">
-                              {r.score} / {r.total} (
-                              {r.total > 0 ? Math.round((r.score / r.total) * 100) : 0}%)
-                            </td>
-                            <td className="py-3 px-4 text-xs font-medium whitespace-nowrap">
-                              <span
-                                className={
-                                  r.tier === 'perfect'
-                                    ? 'text-emerald-700 dark:text-emerald-400'
-                                    : r.tier === 'great'
-                                      ? 'text-sky-700 dark:text-sky-400'
-                                      : r.tier === 'average'
-                                        ? 'text-amber-700 dark:text-amber-400'
-                                        : 'text-rose-700 dark:text-rose-400'
-                                }
-                              >
-                                {r.tierLabel}
-                              </span>
-                            </td>
-                            <td className="py-3 px-4 text-right text-xs font-mono tabular-nums text-slate-500 dark:text-slate-400 whitespace-nowrap">
-                              {new Date(r.completedAt).toLocaleString('uz-UZ', {
-                                day: '2-digit',
-                                month: '2-digit',
-                                hour: '2-digit',
-                                minute: '2-digit',
-                              })}
-                            </td>
-                          </tr>
-                        ))}
+                        {filteredResults.map((r) => {
+                          const passed = isResultPassed(r);
+                          const existingCert = findExistingCertificate(r.id);
+                          return (
+                            <tr
+                              key={r.id}
+                              className="hover:bg-slate-50/80 dark:hover:bg-slate-800/50 transition-colors"
+                            >
+                              <td className="py-3 px-4 font-medium text-slate-900 dark:text-white">
+                                <div>{r.studentName}</div>
+                                <div className="text-[11px] font-mono text-slate-400">
+                                  {new Date(r.completedAt).toLocaleString('uz-UZ', {
+                                    day: '2-digit',
+                                    month: '2-digit',
+                                    hour: '2-digit',
+                                    minute: '2-digit',
+                                  })}
+                                </div>
+                              </td>
+                              <td className="py-3 px-4 font-mono text-xs tabular-nums text-slate-700 dark:text-slate-300">
+                                {r.literacyScore} / {r.literacyTotal}
+                              </td>
+                              <td className="py-3 px-4 font-mono text-xs tabular-nums text-slate-700 dark:text-slate-300">
+                                {r.programmingScore} / {r.programmingTotal}
+                              </td>
+                              <td className="py-3 px-4 font-mono font-semibold tabular-nums text-slate-900 dark:text-white">
+                                {r.score} / {r.total} (
+                                {r.total > 0 ? Math.round((r.score / r.total) * 100) : 0}%)
+                              </td>
+                              <td className="py-3 px-4 text-xs font-medium whitespace-nowrap">
+                                <span
+                                  className={
+                                    r.tier === 'perfect'
+                                      ? 'text-emerald-700 dark:text-emerald-400'
+                                      : r.tier === 'great'
+                                        ? 'text-sky-700 dark:text-sky-400'
+                                        : r.tier === 'average'
+                                          ? 'text-amber-700 dark:text-amber-400'
+                                          : 'text-rose-700 dark:text-rose-400'
+                                  }
+                                >
+                                  {r.tierLabel}
+                                </span>
+                              </td>
+                              <td className="py-3 px-4 text-right whitespace-nowrap">
+                                {passed ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => openIssueCertificate(r)}
+                                    className={`min-h-[36px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${
+                                      existingCert
+                                        ? 'text-emerald-800 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800'
+                                        : 'text-white bg-emerald-600 hover:bg-emerald-700'
+                                    }`}
+                                  >
+                                    <Award className="w-3.5 h-3.5 shrink-0" />
+                                    <span>
+                                      {existingCert ? 'Sertifikatni ko‘rish' : 'Sertifikat chiqarish'}
+                                    </span>
+                                  </button>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 text-xs text-slate-400">
+                                    <XCircle className="w-3.5 h-3.5" />
+                                    O‘tmagan
+                                  </span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+
+          {/* TAB 6B: CERTIFICATES STUDIO */}
+          {activeTab === 'certificates' && (
+            <>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <h1 className="text-2xl font-bold text-slate-900 dark:text-white">
+                    Sertifikat chiqarish markazi
+                  </h1>
+                  <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">
+                    Faqat yakuniy testdan muvaffaqiyatli o‘tgan (kamida 75%) o‘quvchilar uchun rasmiy
+                    sertifikat tayyorlang, PNG yoki PDF shaklida chiqaring.
+                  </p>
+                </div>
+              </div>
+
+              {/* Eligible Passed Students */}
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+                <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3">
+                  <h2 className="text-base font-semibold text-slate-900 dark:text-white">
+                    Testdan o‘tgan o‘quvchilar ({examResults.filter(isResultPassed).length} ta)
+                  </h2>
+                  <span className="text-xs text-slate-500 dark:text-slate-400">
+                    O‘tish talabi: ≥ 75% (15+/20)
+                  </span>
+                </div>
+
+                {examResults.filter(isResultPassed).length === 0 ? (
+                  <div className="p-8 text-center space-y-3">
+                    <Award className="w-9 h-9 text-slate-400 mx-auto" />
+                    <p className="text-sm text-slate-600 dark:text-slate-400 max-w-md mx-auto">
+                      Hozircha testdan o‘tgan o‘quvchi natijasi yo‘q. Imtihondan kamida 75% ball
+                      to‘plangach, shu yerda «Sertifikat chiqarish» tugmasi paydo bo‘ladi.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={onGoToExam}
+                      className="min-h-[40px] px-4 py-2 text-xs font-semibold text-white bg-slate-900 dark:bg-sky-500 dark:text-slate-950 rounded-lg cursor-pointer"
+                    >
+                      Imtihonga o‘tish
+                    </button>
+                  </div>
+                ) : (
+                  <div className="divide-y divide-slate-200 dark:divide-slate-800">
+                    {examResults.filter(isResultPassed).map((r) => {
+                      const pct = r.total > 0 ? Math.round((r.score / r.total) * 100) : 0;
+                      const existing = findExistingCertificate(r.id);
+                      const scopeLabel =
+                        r.examScope === 'programming'
+                          ? 'Dasturlash asoslari'
+                          : r.examScope === 'all'
+                            ? 'Umumiy imtihon'
+                            : 'Kompyuter savodxonligi';
+                      return (
+                        <div
+                          key={r.id}
+                          className="p-4 sm:px-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+                        >
+                          <div>
+                            <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                              <span className="font-semibold text-emerald-700 dark:text-emerald-400">
+                                Testdan o‘tgan
+                              </span>
+                              <span aria-hidden="true">·</span>
+                              <span>{scopeLabel}</span>
+                              <span aria-hidden="true">·</span>
+                              <span className="font-mono tabular-nums">
+                                {r.score}/{r.total} ({pct}%)
+                              </span>
+                            </div>
+                            <div className="text-sm sm:text-base font-bold text-slate-900 dark:text-white mt-0.5">
+                              {r.studentName}
+                            </div>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => openIssueCertificate(r)}
+                            className={`min-h-[42px] inline-flex items-center justify-center gap-2 px-4 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                              existing
+                                ? 'text-emerald-800 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800'
+                                : 'text-white bg-emerald-600 hover:bg-emerald-700'
+                            }`}
+                          >
+                            <Award className="w-4 h-4 shrink-0" />
+                            <span>
+                              {existing
+                                ? `Chiqarilgan (${existing.id}) · Ko‘rish`
+                                : 'Sertifikat tayyorlash va chiqarish'}
+                            </span>
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* Issued Certificates Registry */}
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+                <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800">
+                  <h2 className="text-base font-semibold text-slate-900 dark:text-white">
+                    Chiqarilgan sertifikatlar reestri ({issuedCertificates.length} ta)
+                  </h2>
+                </div>
+
+                {issuedCertificates.length === 0 ? (
+                  <div className="p-8 text-center text-sm text-slate-500 dark:text-slate-400">
+                    Hali birorta sertifikat rasmiylashtirilmagan.
+                  </div>
+                ) : (
+                  <div className="divide-y divide-slate-200 dark:divide-slate-800">
+                    {issuedCertificates.map((cert) => (
+                      <div
+                        key={cert.id}
+                        className="p-4 sm:px-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+                      >
+                        <div>
+                          <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                            <span className="font-mono font-semibold text-emerald-700 dark:text-emerald-400">
+                              {cert.id}
+                            </span>
+                            <span aria-hidden="true">·</span>
+                            <span>{cert.trackTitle}</span>
+                            <span aria-hidden="true">·</span>
+                            <span className="font-mono tabular-nums">
+                              {cert.score}/{cert.total} ({cert.percentage}%)
+                            </span>
+                          </div>
+                          <div className="text-sm font-bold text-slate-900 dark:text-white mt-0.5">
+                            {cert.studentName}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setPreviewCertificate(cert)}
+                            className="min-h-[40px] inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-slate-900 dark:bg-sky-500 dark:text-slate-950 rounded-lg cursor-pointer"
+                          >
+                            <Download className="w-3.5 h-3.5 shrink-0" />
+                            <span>Ko‘rish / Yuklash</span>
+                          </button>
+
+                          {deleteConfirmId === cert.id ? (
+                            <span className="inline-flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => deleteCertificate(cert.id)}
+                                className="px-2.5 py-1 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded cursor-pointer"
+                              >
+                                O‘chirish
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setDeleteConfirmId(null)}
+                                className="px-2 py-1 text-xs text-slate-500 cursor-pointer"
+                              >
+                                Bekor
+                              </button>
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              aria-label="Sertifikatni o‘chirish"
+                              onClick={() => setDeleteConfirmId(cert.id)}
+                              className="min-h-[40px] min-w-[40px] inline-flex items-center justify-center text-slate-400 hover:text-rose-600 rounded-lg cursor-pointer"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>
@@ -2199,18 +2541,36 @@ export function AdminPanel({
             </div>
 
             <form onSubmit={submitDykForm} className="space-y-4">
-              <div>
-                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                  Mavzu nomi
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={dykForm.topic}
-                  onChange={(e) => setDykForm({ ...dykForm, topic: e.target.value })}
-                  placeholder="Masalan: Internet tarixi"
-                  className="w-full min-h-[44px] px-3 py-2 text-base sm:text-sm bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
-                />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                    Yo‘nalish
+                  </label>
+                  <select
+                    value={dykForm.category}
+                    onChange={(e) =>
+                      setDykForm({ ...dykForm, category: e.target.value as LessonCategory })
+                    }
+                    className="w-full min-h-[44px] px-3 py-2 text-base sm:text-sm bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-lg"
+                  >
+                    <option value="literacy">Kompyuter savodxonligi</option>
+                    <option value="programming">Dasturlash asoslari</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                    Mavzu nomi
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={dykForm.topic}
+                    onChange={(e) => setDykForm({ ...dykForm, topic: e.target.value })}
+                    placeholder="Masalan: Internet tarixi"
+                    className="w-full min-h-[44px] px-3 py-2 text-base sm:text-sm bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
+                  />
+                </div>
               </div>
 
               <div>
@@ -2656,6 +3016,88 @@ export function AdminPanel({
             </form>
           </div>
         </div>
+      )}
+
+      {/* MODAL 6: ISSUE CERTIFICATE FOR PASSED STUDENT */}
+      {certIssueAttempt && (
+        <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-end sm:items-center justify-center sm:p-4">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-t-3xl sm:rounded-2xl w-full max-w-md p-5 sm:p-6 pb-[calc(1.5rem+env(safe-area-inset-bottom))]">
+            <div className="flex items-center justify-between gap-4 pb-4 border-b border-slate-200 dark:border-slate-800 mb-5">
+              <h2 className="text-lg font-bold text-slate-900 dark:text-white">
+                Rasmiy sertifikat chiqarish
+              </h2>
+              <button
+                type="button"
+                aria-label="Yopish"
+                onClick={() => setCertIssueAttempt(null)}
+                className="min-h-[44px] min-w-[44px] -mr-2 flex items-center justify-center text-slate-400 hover:text-slate-700 dark:hover:text-white rounded-lg cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleConfirmIssueCertificate} className="space-y-4">
+              <div className="p-3.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 text-xs text-emerald-900 dark:text-emerald-200">
+                Natija:{' '}
+                <span className="font-mono font-bold">
+                  {certIssueAttempt.score} / {certIssueAttempt.total}
+                </span>{' '}
+                ({certIssueAttempt.tierLabel})
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                  O‘quvchi F.I.Sh. (Sertifikatda yoziladi)
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={certStudentName}
+                  onChange={(e) => setCertStudentName(e.target.value)}
+                  placeholder="Masalan: Jasur Aliyev"
+                  className="w-full min-h-[44px] px-3 py-2 text-base sm:text-sm bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                  Tasdiqlovchi ustoz / Rahbar nomi
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={certIssuerName}
+                  onChange={(e) => setCertIssuerName(e.target.value)}
+                  className="w-full min-h-[44px] px-3 py-2 text-base sm:text-sm bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+
+              <div className="flex flex-col-reverse sm:flex-row sm:items-center justify-end gap-2.5 pt-4 border-t border-slate-200 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setCertIssueAttempt(null)}
+                  className="min-h-[44px] px-4 py-2 text-xs font-medium text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 rounded-lg cursor-pointer"
+                >
+                  Bekor qilish
+                </button>
+                <button
+                  type="submit"
+                  className="min-h-[44px] inline-flex items-center justify-center gap-1.5 px-5 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg cursor-pointer"
+                >
+                  <Award className="w-4 h-4 shrink-0" />
+                  <span>Sertifikat yaratish va ko‘rish</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {previewCertificate && (
+        <CertificatePreviewModal
+          certificate={previewCertificate}
+          onClose={() => setPreviewCertificate(null)}
+        />
       )}
     </div>
   );

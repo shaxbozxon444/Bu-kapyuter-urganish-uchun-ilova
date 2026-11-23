@@ -19,6 +19,11 @@ export function LessonInteractiveWidget({ type }: LessonInteractiveWidgetProps) 
   const [loopCount, setLoopCount] = useState<number>(3);
   const [webStep, setWebStep] = useState<'frontend' | 'api' | 'backend'>('frontend');
   const [activeLang, setActiveLang] = useState<'html' | 'css' | 'js' | 'python'>('html');
+  const [dnsDomain, setDnsDomain] = useState<'google.com' | 'murodillayev.dev' | 'uzedu.uz'>('murodillayev.dev');
+  const [promptQuality, setPromptQuality] = useState<'weak' | 'pro'>('pro');
+  const [sampleType, setSampleType] = useState<'string' | 'number' | 'boolean'>('string');
+  const [fnInputA, setFnInputA] = useState<number>(12);
+  const [fnInputB, setFnInputB] = useState<number>(8);
 
   if (type === 'hardware') {
     const details = {
@@ -485,6 +490,183 @@ export function LessonInteractiveWidget({ type }: LessonInteractiveWidgetProps) 
         <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
           {webInfo[webStep]}
         </p>
+      </div>
+    );
+  }
+
+  if (type === 'network') {
+    const dnsMap = {
+      'murodillayev.dev': { ip: '104.21.48.192', cloud: 'Google Cloud / CDN' },
+      'google.com': { ip: '142.250.185.78', cloud: 'Google Global Server' },
+      'uzedu.uz': { ip: '195.158.12.44', cloud: 'Milliy Server (Toshkent)' },
+    };
+    const info = dnsMap[dnsDomain];
+    return (
+      <div className="pt-4 border-t border-slate-200 dark:border-slate-800">
+        <p className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-2.5">
+          DNS tarjimasini sinab ko‘ring — sayt nomini tanlang:
+        </p>
+        <div className="flex flex-wrap gap-1.5 bg-slate-100 dark:bg-slate-800 p-1 rounded-lg mb-3">
+          {(['murodillayev.dev', 'google.com', 'uzedu.uz'] as const).map((dom) => (
+            <button
+              key={dom}
+              type="button"
+              onClick={() => setDnsDomain(dom)}
+              className={`flex-1 min-h-[40px] py-2 px-2 font-mono text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                dnsDomain === dom
+                  ? 'bg-white dark:bg-slate-950 text-sky-700 dark:text-sky-400 shadow-sm'
+                  : 'text-slate-600 dark:text-slate-300'
+              }`}
+            >
+              {dom}
+            </button>
+          ))}
+        </div>
+        <div className="bg-slate-900 dark:bg-slate-950 text-slate-200 font-mono text-xs p-3 rounded-lg border border-slate-800 flex flex-wrap items-center justify-between gap-2">
+          <span>
+            {dnsDomain} ➔ <strong className="text-emerald-400">{info.ip}</strong>
+          </span>
+          <span className="text-slate-400">{info.cloud}</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (type === 'ai') {
+    return (
+      <div className="pt-4 border-t border-slate-200 dark:border-slate-800">
+        <p className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-2.5">
+          AI ga savol berish usulini solishtiring:
+        </p>
+        <div className="grid grid-cols-2 gap-1.5 bg-slate-100 dark:bg-slate-800 p-1 rounded-lg mb-3">
+          <button
+            type="button"
+            onClick={() => setPromptQuality('weak')}
+            className={`min-h-[40px] py-2 px-3 text-xs font-medium rounded-md transition-colors cursor-pointer ${
+              promptQuality === 'weak'
+                ? 'bg-white dark:bg-slate-950 text-rose-700 dark:text-rose-400 shadow-sm'
+                : 'text-slate-600 dark:text-slate-300'
+            }`}
+          >
+            Oddiy so‘rov
+          </button>
+          <button
+            type="button"
+            onClick={() => setPromptQuality('pro')}
+            className={`min-h-[40px] py-2 px-3 text-xs font-medium rounded-md transition-colors cursor-pointer ${
+              promptQuality === 'pro'
+                ? 'bg-white dark:bg-slate-950 text-emerald-700 dark:text-emerald-400 shadow-sm'
+                : 'text-slate-600 dark:text-slate-300'
+            }`}
+          >
+            Aniq Prompt
+          </button>
+        </div>
+        <div className="text-xs p-3 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1.5">
+          <div className="font-medium text-slate-900 dark:text-white">
+            {promptQuality === 'weak'
+              ? 'So‘rov: "Algoritm haqida yoz."'
+              : 'Prompt: "Tajribali IT o‘qituvchi sifatida 7-sinf o‘quvchisi uchun algoritmni choy damlash misolida 3 ta qisqa bandda tushuntir."'}
+          </div>
+          <div
+            className={
+              promptQuality === 'weak'
+                ? 'text-rose-700 dark:text-rose-400'
+                : 'text-emerald-700 dark:text-emerald-400'
+            }
+          >
+            {promptQuality === 'weak'
+              ? 'Natija: Juda umumiy, zerikarli va uzun matn chiqadi.'
+              : 'Natija: Rol + Vazifa + Format aniq bo‘lgani uchun a’lo javob chiqadi.'}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (type === 'datatypes') {
+    const typeMap = {
+      string: {
+        code: 'ism = "Azizbek"',
+        typeName: 'String (Matn)',
+        note: 'Qo‘shtirnoq ichida yoziladi. Matnlarni ulash mumkin: "Salom, " + ism.',
+      },
+      number: {
+        code: 'ball = 95',
+        typeName: 'Number (Son)',
+        note: 'Qo‘shtirnoqsiz yoziladi. Qo‘shish, ayirish va taqqoslash amallari bajariladi.',
+      },
+      boolean: {
+        code: 'otdi = true',
+        typeName: 'Boolean (Mantiqiy)',
+        note: 'Faqat true (rost) yoki false (yolg‘on) qiymat oladi; if/else da ishlatiladi.',
+      },
+    };
+    const cur = typeMap[sampleType];
+    return (
+      <div className="pt-4 border-t border-slate-200 dark:border-slate-800">
+        <p className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-2.5">
+          Ma’lumot turini tanlang:
+        </p>
+        <div className="grid grid-cols-3 gap-1.5 bg-slate-100 dark:bg-slate-800 p-1 rounded-lg mb-3">
+          {(['string', 'number', 'boolean'] as const).map((t) => (
+            <button
+              key={t}
+              type="button"
+              onClick={() => setSampleType(t)}
+              className={`min-h-[40px] py-2 px-2 text-xs font-medium rounded-md transition-colors cursor-pointer ${
+                sampleType === t
+                  ? 'bg-white dark:bg-slate-950 text-indigo-700 dark:text-indigo-300 shadow-sm'
+                  : 'text-slate-600 dark:text-slate-300'
+              }`}
+            >
+              {t === 'string' ? 'String' : t === 'number' ? 'Number' : 'Boolean'}
+            </button>
+          ))}
+        </div>
+        <div className="bg-slate-900 dark:bg-slate-950 font-mono text-xs p-3 rounded-lg border border-slate-800 space-y-1">
+          <div className="text-indigo-300">{cur.code}</div>
+          <div className="text-emerald-400">Turi: {cur.typeName}</div>
+        </div>
+        <p className="text-xs text-slate-600 dark:text-slate-400 mt-2">{cur.note}</p>
+      </div>
+    );
+  }
+
+  if (type === 'functions') {
+    return (
+      <div className="pt-4 border-t border-slate-200 dark:border-slate-800">
+        <p className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-2.5">
+          Funksiya parametrlarini o‘zgartirib ko‘ring:
+        </p>
+        <div className="grid grid-cols-2 gap-2 mb-3">
+          <label className="text-xs text-slate-600 dark:text-slate-300">
+            a qiymati:
+            <input
+              type="number"
+              value={fnInputA}
+              onChange={(e) => setFnInputA(Number(e.target.value) || 0)}
+              className="mt-1 w-full min-h-[40px] px-2.5 py-1.5 font-mono text-xs bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
+            />
+          </label>
+          <label className="text-xs text-slate-600 dark:text-slate-300">
+            b qiymati:
+            <input
+              type="number"
+              value={fnInputB}
+              onChange={(e) => setFnInputB(Number(e.target.value) || 0)}
+              className="mt-1 w-full min-h-[40px] px-2.5 py-1.5 font-mono text-xs bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
+            />
+          </label>
+        </div>
+        <div className="bg-slate-900 dark:bg-slate-950 font-mono text-xs p-3 rounded-lg border border-slate-800 space-y-1">
+          <div className="text-slate-300">
+            function yigindi(a, b) {'{'} return a + b; {'}'}
+          </div>
+          <div className="text-emerald-400">
+            yigindi({fnInputA}, {fnInputB}) ➔ return {fnInputA + fnInputB}
+          </div>
+        </div>
       </div>
     );
   }

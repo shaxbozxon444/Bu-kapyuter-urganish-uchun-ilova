@@ -1,0 +1,225 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. Hardened Global Primitives
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+    function incoming() {
+      return request.resource.data;
+    }
+    function existing() {
+      return resource.data;
+    }
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+    function isBootstrapAdmin() {
+      return isSignedIn()
+        && request.auth.token.email == 'shaxbozxon444@gmail.com'
+        && request.auth.token.email_verified == true;
+    }
+    function isStringList(arr, maxLen) {
+      return arr is list && arr.size() <= maxLen && (arr.size() == 0 || arr[0] is string);
+    }
+    function isValidExamAttempts(m) {
+      return m is map
+        && m.keys().hasAll(['literacy', 'programming', 'all'])
+        && m.keys().hasOnly(['literacy', 'programming', 'all'])
+        && m.literacy is int && m.literacy >= 0 && m.literacy <= 3
+        && m.programming is int && m.programming >= 0 && m.programming <= 3
+        && m.all is int && m.all >= 0 && m.all <= 3;
+    }
+
+    // 3. Entity Validation Blueprints
+    function isValidUserProfile(data) {
+      return data.keys().hasAll([
+          'uid', 'displayName', 'email', 'role', 'activeTrack',
+          'completedLessons', 'watchedVideos', 'solvedChallenges',
+          'examAttempts', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'uid', 'displayName', 'email', 'role', 'activeTrack',
+          'completedLessons', 'watchedVideos', 'solvedChallenges',
+          'examAttempts', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.uid)
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100
+        && data.email is string && data.email.size() <= 150
+        && data.role in ['student', 'admin']
+        && data.activeTrack in ['literacy', 'programming']
+        && isStringList(data.completedLessons, 100)
+        && isStringList(data.watchedVideos, 100)
+        && isStringList(data.solvedChallenges, 100)
+        && isValidExamAttempts(data.examAttempts)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidExamResult(data) {
+      return data.keys().hasAll([
+          'id', 'userId', 'studentName', 'examScope', 'score', 'total', 'passed',
+          'literacyScore', 'literacyTotal', 'programmingScore', 'programmingTotal',
+          'tier', 'tierLabel', 'completedAt', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'userId', 'studentName', 'examScope', 'score', 'total', 'passed',
+          'literacyScore', 'literacyTotal', 'programmingScore', 'programmingTotal',
+          'tier', 'tierLabel', 'completedAt', 'createdAt'
+        ])
+        && isValidId(data.id)
+        && isValidId(data.userId)
+        && data.studentName is string && data.studentName.size() >= 1 && data.studentName.size() <= 100
+        && data.examScope in ['literacy', 'programming', 'all']
+        && data.score is int && data.score >= 0 && data.score <= 100
+        && data.total is int && data.total >= 1 && data.total <= 100
+        && data.score <= data.total
+        && data.passed is bool
+        && data.literacyScore is int && data.literacyScore >= 0 && data.literacyScore <= 100
+        && data.literacyTotal is int && data.literacyTotal >= 0 && data.literacyTotal <= 100
+        && data.programmingScore is int && data.programmingScore >= 0 && data.programmingScore <= 100
+        && data.programmingTotal is int && data.programmingTotal >= 0 && data.programmingTotal <= 100
+        && data.tier in ['perfect', 'great', 'average', 'retry']
+        && data.tierLabel is string && data.tierLabel.size() >= 1 && data.tierLabel.size() <= 200
+        && data.completedAt is string && data.completedAt.size() >= 1 && data.completedAt.size() <= 80
+        && data.createdAt is timestamp;
+    }
+
+    function isValidCertificate(data) {
+      return data.keys().hasAll([
+          'id', 'userId', 'resultId', 'studentName', 'track', 'trackTitle',
+          'score', 'total', 'percentage', 'tierLabel', 'issuedAt', 'issuerName', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'userId', 'resultId', 'studentName', 'track', 'trackTitle',
+          'score', 'total', 'percentage', 'tierLabel', 'issuedAt', 'issuerName', 'createdAt'
+        ])
+        && isValidId(data.id)
+        && isValidId(data.userId)
+        && isValidId(data.resultId)
+        && data.studentName is string && data.studentName.size() >= 1 && data.studentName.size() <= 100
+        && data.track in ['literacy', 'programming', 'all']
+        && data.trackTitle is string && data.trackTitle.size() >= 1 && data.trackTitle.size() <= 120
+        && data.score is int && data.score >= 0 && data.score <= 100
+        && data.total is int && data.total >= 1 && data.total <= 100
+        && data.score <= data.total
+        && data.percentage is int && data.percentage >= 75 && data.percentage <= 100
+        && data.tierLabel is string && data.tierLabel.size() >= 1 && data.tierLabel.size() <= 200
+        && data.issuedAt is string && data.issuedAt.size() >= 1 && data.issuedAt.size() <= 80
+        && data.issuerName is string && data.issuerName.size() >= 1 && data.issuerName.size() <= 120
+        && data.createdAt is timestamp;
+    }
+
+    function isValidCurriculum(data) {
+      return data.keys().hasAll([
+          'videoLessons', 'lessons', 'didYouKnowCards', 'examQuestions', 'glossaryTerms', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'videoLessons', 'lessons', 'didYouKnowCards', 'examQuestions', 'glossaryTerms', 'updatedAt'
+        ])
+        && data.videoLessons is list && data.videoLessons.size() <= 100
+        && data.lessons is list && data.lessons.size() <= 100
+        && data.didYouKnowCards is list && data.didYouKnowCards.size() <= 100
+        && data.examQuestions is list && data.examQuestions.size() <= 200
+        && data.glossaryTerms is list && data.glossaryTerms.size() <= 200
+        && data.updatedAt is timestamp;
+    }
+
+    // 4. Collection Rules
+
+    // Connection health check (required by SDK startup validation)
+    match /test/connection {
+      allow get: if true;
+      allow list, write: if false;
+    }
+
+    // User Profiles & Persistent Progress (PII isolated to owner or bootstrap admin)
+    match /users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && (isOwner(userId) || isBootstrapAdmin());
+      allow list: if isSignedIn() && isBootstrapAdmin();
+      allow create: if isSignedIn()
+        && isValidId(userId)
+        && isOwner(userId)
+        && isValidUserProfile(incoming())
+        && incoming().uid == request.auth.uid
+        && incoming().role == 'student'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isSignedIn()
+        && isValidId(userId)
+        && isValidUserProfile(incoming())
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isBootstrapAdmin() || (
+            isOwner(userId)
+            && incoming().role == existing().role
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'displayName', 'activeTrack', 'completedLessons',
+              'watchedVideos', 'solvedChallenges', 'examAttempts', 'updatedAt'
+            ])
+          )
+        );
+      allow delete: if isSignedIn() && isValidId(userId) && isBootstrapAdmin();
+    }
+
+    // Immutable Exam Results
+    match /examResults/{resultId} {
+      allow get: if isSignedIn() && isValidId(resultId) && (existing().userId == request.auth.uid || isBootstrapAdmin());
+      allow list: if isSignedIn() && (isBootstrapAdmin() || resource.data.userId == request.auth.uid);
+      allow create: if isSignedIn()
+        && isValidId(resultId)
+        && isValidExamResult(incoming())
+        && incoming().userId == request.auth.uid
+        && incoming().createdAt == request.time;
+      allow update: if false;
+      allow delete: if isSignedIn() && isValidId(resultId) && isBootstrapAdmin();
+    }
+
+    // Official Certificates (>= 75% passed exams)
+    match /certificates/{certId} {
+      allow get: if isSignedIn() && isValidId(certId) && (existing().userId == request.auth.uid || isBootstrapAdmin());
+      allow list: if isSignedIn() && (isBootstrapAdmin() || resource.data.userId == request.auth.uid);
+      allow create: if isSignedIn()
+        && isValidId(certId)
+        && isValidCertificate(incoming())
+        && incoming().createdAt == request.time
+        && (
+          isBootstrapAdmin() || (
+            incoming().userId == request.auth.uid
+            && exists(/databases/$(database)/documents/examResults/$(incoming().resultId))
+            && get(/databases/$(database)/documents/examResults/$(incoming().resultId)).data.userId == request.auth.uid
+            && get(/databases/$(database)/documents/examResults/$(incoming().resultId)).data.passed == true
+          )
+        );
+      allow update: if isSignedIn()
+        && isValidId(certId)
+        && isValidCertificate(incoming())
+        && incoming().createdAt == existing().createdAt
+        && incoming().userId == existing().userId
+        && isBootstrapAdmin();
+      allow delete: if isSignedIn() && isValidId(certId) && isBootstrapAdmin();
+    }
+
+    // Admin-customized Curriculum (publicly readable, admin-writable)
+    match /curriculum/{docId} {
+      allow get: if isValidId(docId);
+      allow list: if false;
+      allow create, update: if isSignedIn()
+        && isValidId(docId)
+        && isValidCurriculum(incoming())
+        && incoming().updatedAt == request.time
+        && isBootstrapAdmin();
+      allow delete: if false;
+    }
+  }
+}

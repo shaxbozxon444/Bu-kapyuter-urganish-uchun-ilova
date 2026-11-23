@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import type { LessonCategory } from '../data/curriculum';
 import {
   CheckCircle2,
   HardDrive,
@@ -37,8 +38,18 @@ const PHISHING_CASES = [
   },
 ];
 
-export function CodePlaygroundSection() {
-  const [labMode, setLabMode] = useState<LabMode>('code');
+interface CodePlaygroundSectionProps {
+  activeTrack?: LessonCategory;
+}
+
+export function CodePlaygroundSection({ activeTrack = 'programming' }: CodePlaygroundSectionProps) {
+  const [labMode, setLabMode] = useState<LabMode>(
+    activeTrack === 'literacy' ? 'literacy' : 'code'
+  );
+
+  useEffect(() => {
+    setLabMode(activeTrack === 'literacy' ? 'literacy' : 'code');
+  }, [activeTrack]);
 
   // --- Mode 1: Code Runner ---
   const [preset, setPreset] = useState<PresetId>('greeting');
@@ -178,13 +189,20 @@ export function CodePlaygroundSection() {
       <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-6 mb-8">
           <div className="max-w-2xl">
-            <p className="text-sm font-semibold text-sky-700 dark:text-sky-400 mb-2">
-              Amaliy laboratoriya · Dasturlash va Savodxonlik
+            <p
+              className={`text-sm font-semibold mb-2 ${
+                activeTrack === 'programming'
+                  ? 'text-indigo-700 dark:text-indigo-400'
+                  : 'text-sky-700 dark:text-sky-400'
+              }`}
+            >
+              Amaliy laboratoriya ·{' '}
+              {activeTrack === 'programming' ? 'Dasturlash muhiti' : 'Kompyuter savodxonligi'}
             </p>
-            <h2 className="text-3xl sm:text-4xl font-bold tracking-tight text-slate-900 dark:text-white text-balance">
+            <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-slate-900 dark:text-white text-balance">
               Nazariyani amalda sinab ko‘ring
             </h2>
-            <p className="mt-3 text-base text-slate-600 dark:text-slate-300 leading-relaxed">
+            <p className="mt-2 text-sm sm:text-base text-slate-600 dark:text-slate-300 leading-relaxed">
               Kod yozish mantiqini, klaviaturada tez terishni, xavfli xabarlarni aniqlashni va
               xotira o‘lchov birliklarini bitta laboratoriyada mashq qiling.
             </p>

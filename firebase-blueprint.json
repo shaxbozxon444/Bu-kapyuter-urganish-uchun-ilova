@@ -1,0 +1,290 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated learner profile and persistent learning progress across devices.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "email": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 150
+        },
+        "role": {
+          "type": "string",
+          "enum": ["student", "admin"]
+        },
+        "activeTrack": {
+          "type": "string",
+          "enum": ["literacy", "programming"]
+        },
+        "completedLessons": {
+          "type": "array",
+          "description": "Completed lesson IDs (max 100)."
+        },
+        "watchedVideos": {
+          "type": "array",
+          "description": "Watched video IDs (max 100)."
+        },
+        "solvedChallenges": {
+          "type": "array",
+          "description": "Solved hard practice challenge IDs (max 100)."
+        },
+        "examAttempts": {
+          "type": "object",
+          "description": "Exam attempt counts per scope (literacy, programming, all), max 3 each."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "uid",
+        "displayName",
+        "email",
+        "role",
+        "activeTrack",
+        "completedLessons",
+        "watchedVideos",
+        "solvedChallenges",
+        "examAttempts",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "ExamResultRecord": {
+      "title": "ExamResultRecord",
+      "description": "Immutable record of a submitted final exam attempt.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "userId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "studentName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "examScope": {
+          "type": "string",
+          "enum": ["literacy", "programming", "all"]
+        },
+        "score": {
+          "type": "integer"
+        },
+        "total": {
+          "type": "integer"
+        },
+        "passed": {
+          "type": "boolean"
+        },
+        "literacyScore": {
+          "type": "integer"
+        },
+        "literacyTotal": {
+          "type": "integer"
+        },
+        "programmingScore": {
+          "type": "integer"
+        },
+        "programmingTotal": {
+          "type": "integer"
+        },
+        "tier": {
+          "type": "string",
+          "enum": ["perfect", "great", "average", "retry"]
+        },
+        "tierLabel": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "completedAt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "userId",
+        "studentName",
+        "examScope",
+        "score",
+        "total",
+        "passed",
+        "literacyScore",
+        "literacyTotal",
+        "programmingScore",
+        "programmingTotal",
+        "tier",
+        "tierLabel",
+        "completedAt",
+        "createdAt"
+      ]
+    },
+    "CertificateDoc": {
+      "title": "CertificateDoc",
+      "description": "Issued official certificate for passed exam results (>= 75%).",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "userId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "resultId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "studentName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "track": {
+          "type": "string",
+          "enum": ["literacy", "programming", "all"]
+        },
+        "trackTitle": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "score": {
+          "type": "integer"
+        },
+        "total": {
+          "type": "integer"
+        },
+        "percentage": {
+          "type": "integer"
+        },
+        "tierLabel": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "issuedAt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "issuerName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "userId",
+        "resultId",
+        "studentName",
+        "track",
+        "trackTitle",
+        "score",
+        "total",
+        "percentage",
+        "tierLabel",
+        "issuedAt",
+        "issuerName",
+        "createdAt"
+      ]
+    },
+    "CurriculumBundle": {
+      "title": "CurriculumBundle",
+      "description": "Optional admin-customized curriculum items stored persistently in Firestore.",
+      "type": "object",
+      "properties": {
+        "videoLessons": {
+          "type": "array"
+        },
+        "lessons": {
+          "type": "array"
+        },
+        "didYouKnowCards": {
+          "type": "array"
+        },
+        "examQuestions": {
+          "type": "array"
+        },
+        "glossaryTerms": {
+          "type": "array"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "videoLessons",
+        "lessons",
+        "didYouKnowCards",
+        "examQuestions",
+        "glossaryTerms",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Private user account and persistent learning progress isolated per authenticated user."
+    },
+    "/examResults/{resultId}": {
+      "schema": { "$ref": "#/entities/ExamResultRecord" },
+      "description": "Exam attempt records scoped by userId (or readable by admin)."
+    },
+    "/certificates/{certId}": {
+      "schema": { "$ref": "#/entities/CertificateDoc" },
+      "description": "Issued certificates linked to a passed exam result."
+    },
+    "/curriculum/{docId}": {
+      "schema": { "$ref": "#/entities/CurriculumBundle" },
+      "description": "Publicly readable, admin-writable customized curriculum store."
+    }
+  }
+}

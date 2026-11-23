@@ -8,15 +8,28 @@
 }
 
 @layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    touch-action: manipulation;
+  }
+
   body {
     font-family: var(--font-sans);
     background-color: #f8fafc;
     color: #0f172a;
+    overflow-x: hidden;
   }
 
   .dark body {
     background-color: #020617;
     color: #f1f5f9;
+  }
+
+  button,
+  a,
+  [role="button"] {
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
   }
 
   h1,
@@ -25,6 +38,11 @@
   h4 {
     font-family: var(--font-display);
   }
+}
+
+.cv-auto {
+  content-visibility: auto;
+  contain-intrinsic-size: 320px;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -37,5 +55,24 @@
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+}
+
+@media print {
+  body * {
+    visibility: hidden !important;
+  }
+  #certificate-print-area,
+  #certificate-print-area * {
+    visibility: visible !important;
+  }
+  #certificate-print-area {
+    position: fixed !important;
+    inset: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+    background: #ffffff !important;
   }
 }

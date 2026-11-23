@@ -4,7 +4,9 @@ import {
   ChevronLeft,
   ChevronRight,
   Circle,
+  Code2,
   LayoutGrid,
+  Monitor,
   Smartphone,
   Video,
 } from 'lucide-react';
@@ -15,35 +17,101 @@ import { ResilientImage } from './ResilientImage';
 interface LessonsSectionProps {
   lessons: LessonItem[];
   completedLessons: string[];
+  activeTrack: LessonCategory;
+  onSelectTrack: (track: LessonCategory) => void;
   focusedLessonId?: string | null;
   onToggleLesson: (id: string) => void;
   onOpenVideos?: () => void;
   onStartExam: () => void;
 }
 
-type FilterOption = 'all' | LessonCategory;
+function getLessonVisual(lesson: LessonItem): { src: string; alt: string } {
+  const widget = lesson.widgetType;
+  const id = lesson.id.toLowerCase();
+
+  if (widget === 'hardware' || widget === 'shortcuts' || widget === 'os' || id.includes('hardware')) {
+    return {
+      src: '/src/assets/images/computer_hardware_diagram_1795163268376.jpg',
+      alt: `${lesson.title} — kompyuter qismlari va tizim sxemasi`,
+    };
+  }
+  if (widget === 'security' || id.includes('cyber') || id.includes('xavf')) {
+    return {
+      src: '/src/assets/images/cyber_security_shield_1795425392051.jpg',
+      alt: `${lesson.title} — kiberxavfsizlik va parol himoyasi illyustratsiyasi`,
+    };
+  }
+  if (widget === 'office' || widget === 'network' || widget === 'files' || id.includes('excel') || id.includes('internet')) {
+    return {
+      src: '/src/assets/images/spreadsheet_network_lab_1795425391913.jpg',
+      alt: `${lesson.title} — jadval formulalari va internet tarmog‘i illyustratsiyasi`,
+    };
+  }
+  if (widget === 'ai' || id.includes('ai') || id.includes('prompt')) {
+    return {
+      src: '/src/assets/images/ai_mentor_learning_1795425392617.jpg',
+      alt: `${lesson.title} — sun’iy intellekt va zamonaviy savodxonlik illyustratsiyasi`,
+    };
+  }
+  if (widget === 'binary' || widget === 'algorithm' || widget === 'datatypes' || widget === 'ifelse' || widget === 'loops' || widget === 'functions') {
+    return {
+      src: '/src/assets/images/programming_logic_visual_1795163270407.jpg',
+      alt: `${lesson.title} — dasturlash algoritmi va kod mantiqi illyustratsiyasi`,
+    };
+  }
+  if (lesson.category === 'programming' || widget === 'languages' || widget === 'webarch') {
+    return {
+      src: '/src/assets/images/mobile_coding_journey_1795425391520.jpg',
+      alt: `${lesson.title} — dasturlash mashqlari va rivojlanish illyustratsiyasi`,
+    };
+  }
+  return {
+    src: '/src/assets/images/hero_coding_studio_1795163267457.jpg',
+    alt: `${lesson.title} — o‘quv ish stoli illyustratsiyasi`,
+  };
+}
 
 export function LessonsSection({
   lessons,
   completedLessons,
+  activeTrack,
+  onSelectTrack,
   focusedLessonId,
   onToggleLesson,
   onOpenVideos,
   onStartExam,
 }: LessonsSectionProps) {
-  const [filter, setFilter] = useState<FilterOption>('all');
+  const [showAllTracks, setShowAllTracks] = useState(false);
   const [viewLayout, setViewLayout] = useState<'pager' | 'grid'>('pager');
-  const [selectedId, setSelectedId] = useState<string>(() => lessons[0]?.id ?? '');
+  const [selectedId, setSelectedId] = useState<string>(
+    () => lessons.find((l) => l.category === activeTrack)?.id ?? lessons[0]?.id ?? ''
+  );
 
   useEffect(() => {
-    if (focusedLessonId && lessons.some((l) => l.id === focusedLessonId)) {
-      setFilter('all');
-      setSelectedId(focusedLessonId);
+    if (focusedLessonId) {
+      const target = lessons.find((l) => l.id === focusedLessonId);
+      if (target) {
+        setShowAllTracks(false);
+        if (target.category !== activeTrack) {
+          onSelectTrack(target.category);
+        }
+        setSelectedId(target.id);
+        return;
+      }
     }
-  }, [focusedLessonId, lessons]);
+  }, [focusedLessonId, lessons, activeTrack, onSelectTrack]);
 
-  const filteredLessons =
-    filter === 'all' ? lessons : lessons.filter((item) => item.category === filter);
+  useEffect(() => {
+    setShowAllTracks(false);
+    const firstInTrack = lessons.find((l) => l.category === activeTrack);
+    if (firstInTrack) {
+      setSelectedId(firstInTrack.id);
+    }
+  }, [activeTrack, lessons]);
+
+  const filteredLessons = showAllTracks
+    ? lessons
+    : lessons.filter((item) => item.category === activeTrack);
 
   const activeIndex = Math.max(
     0,
@@ -51,28 +119,46 @@ export function LessonsSection({
   );
   const activeLesson = filteredLessons[activeIndex] ?? filteredLessons[0];
 
-  const completedInCurrentList = completedLessons.filter((id) =>
-    lessons.some((l) => l.id === id)
+  const completedInTrack = completedLessons.filter((id) =>
+    filteredLessons.some((l) => l.id === id)
   ).length;
   const literacyCount = lessons.filter((l) => l.category === 'literacy').length;
   const programmingCount = lessons.filter((l) => l.category === 'programming').length;
 
+  const isProg = activeTrack === 'programming';
+  const accentLabel = isProg
+    ? 'text-indigo-700 dark:text-indigo-400'
+    : 'text-sky-700 dark:text-sky-400';
+  const dotColor = isProg
+    ? 'bg-indigo-600 dark:bg-indigo-400'
+    : 'bg-sky-600 dark:bg-sky-400';
+
   const renderLessonCard = (lesson: LessonItem) => {
     const isCompleted = completedLessons.includes(lesson.id);
+    const cardIsProg = lesson.category === 'programming';
+    const visual = getLessonVisual(lesson);
     return (
       <article
         id={`lesson-${lesson.id}`}
         key={lesson.id}
-        className={`scroll-mt-20 bg-white dark:bg-slate-900 rounded-2xl border p-5 sm:p-6 flex flex-col justify-between transition-colors ${
+        className={`cv-auto scroll-mt-20 bg-white dark:bg-slate-900 rounded-2xl border p-5 sm:p-6 flex flex-col justify-between transition-colors ${
           isCompleted
             ? 'border-emerald-300 dark:border-emerald-700'
-            : 'border-slate-200 dark:border-slate-800'
+            : cardIsProg
+              ? 'border-indigo-200/80 dark:border-indigo-900/70'
+              : 'border-slate-200 dark:border-slate-800'
         }`}
       >
         <div className="space-y-4">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-              <span className="font-mono font-semibold text-sky-700 dark:text-sky-400 tabular-nums">
+              <span
+                className={`font-mono font-semibold tabular-nums ${
+                  cardIsProg
+                    ? 'text-indigo-700 dark:text-indigo-400'
+                    : 'text-sky-700 dark:text-sky-400'
+                }`}
+              >
                 {lesson.number}
               </span>
               <span aria-hidden="true">·</span>
@@ -99,6 +185,15 @@ export function LessonsSection({
             </button>
           </div>
 
+          <div className="aspect-[16/9] sm:aspect-[2/1] w-full rounded-xl overflow-hidden border border-slate-200/80 dark:border-slate-800 bg-slate-100 dark:bg-slate-800">
+            <ResilientImage
+              src={visual.src}
+              alt={visual.alt}
+              fallbackTitle={lesson.title}
+              className="w-full h-full object-cover"
+            />
+          </div>
+
           <div>
             <h3 className="text-xl font-semibold text-slate-900 dark:text-white leading-snug mb-2">
               {lesson.title}
@@ -109,7 +204,13 @@ export function LessonsSection({
           </div>
 
           <div className="pt-4 border-t border-slate-100 dark:border-slate-800">
-            <p className="text-xs font-semibold text-sky-700 dark:text-sky-400 mb-1">
+            <p
+              className={`text-xs font-semibold mb-1 ${
+                cardIsProg
+                  ? 'text-indigo-700 dark:text-indigo-400'
+                  : 'text-sky-700 dark:text-sky-400'
+              }`}
+            >
               {lesson.analogyTitle}
             </p>
             <p className="text-sm text-slate-700 dark:text-slate-300 leading-relaxed">
@@ -125,7 +226,9 @@ export function LessonsSection({
               >
                 <span
                   aria-hidden="true"
-                  className="mt-2 w-1.5 h-1.5 rounded-full bg-sky-600 dark:bg-sky-400 shrink-0"
+                  className={`mt-2 w-1.5 h-1.5 rounded-full shrink-0 ${
+                    cardIsProg ? 'bg-indigo-600 dark:bg-indigo-400' : dotColor
+                  }`}
                 />
                 <span>{point}</span>
               </li>
@@ -143,54 +246,79 @@ export function LessonsSection({
   return (
     <section
       id="darslar"
-      className="py-6 sm:py-10 md:py-14 bg-slate-50 dark:bg-slate-950 min-h-[calc(100vh-8rem)]"
+      className="py-6 sm:py-10 md:py-12 bg-slate-50 dark:bg-slate-950 min-h-[calc(100vh-8rem)]"
     >
       <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
-        {/* Compact Section Header + Filter + Mode Toggle */}
+        {/* Compact Section Header + Separate Track Tabs + Mode Toggle */}
         <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4 mb-6">
           <div>
-            <p className="text-xs sm:text-sm font-semibold text-sky-700 dark:text-sky-400 mb-1">
-              Mini-darslar · {completedInCurrentList} / {lessons.length} o‘zlashtirildi
+            <p className={`text-xs sm:text-sm font-semibold mb-1 ${accentLabel}`}>
+              {showAllTracks
+                ? `Barcha mini-darslar · ${completedInTrack} / ${filteredLessons.length}`
+                : isProg
+                  ? `Dasturlash asoslari · ${completedInTrack} / ${filteredLessons.length} o‘zlashtirildi`
+                  : `Kompyuter savodxonligi · ${completedInTrack} / ${filteredLessons.length} o‘zlashtirildi`}
             </p>
             <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-slate-900 dark:text-white">
-              Noldan bosqichma-bosqich o‘rganing
+              {isProg
+                ? 'Kodlash va algoritmlarni bosqichma-bosqich o‘rganing'
+                : 'Kompyuter ko‘nikmalarini noldan professionalgacha o‘rganing'}
             </h2>
           </div>
 
           <div className="flex flex-wrap items-center gap-2.5">
             <div
               role="tablist"
-              aria-label="Darslar bo‘limini filtrlash"
-              className="flex items-center gap-1 p-1 bg-slate-200/70 dark:bg-slate-800 rounded-lg overflow-x-auto max-w-full"
+              aria-label="Darslar yo‘nalishi"
+              className="flex items-center gap-1 p-1 bg-slate-200/80 dark:bg-slate-800 rounded-xl overflow-x-auto max-w-full"
             >
-              {(
-                [
-                  { id: 'all', label: 'Barchasi' },
-                  { id: 'literacy', label: 'Savodxonlik' },
-                  { id: 'programming', label: 'Dasturlash' },
-                ] as const
-              ).map((tab) => (
-                <button
-                  key={tab.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={filter === tab.id}
-                  onClick={() => {
-                    setFilter(tab.id);
-                    const first = (
-                      tab.id === 'all' ? lessons : lessons.filter((l) => l.category === tab.id)
-                    )[0];
-                    if (first) setSelectedId(first.id);
-                  }}
-                  className={`min-h-[40px] px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                    filter === tab.id
-                      ? 'bg-white dark:bg-slate-950 text-slate-900 dark:text-white shadow-sm'
-                      : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
-                  }`}
-                >
-                  {tab.label}
-                </button>
-              ))}
+              <button
+                type="button"
+                role="tab"
+                aria-selected={!showAllTracks && activeTrack === 'literacy'}
+                onClick={() => {
+                  setShowAllTracks(false);
+                  onSelectTrack('literacy');
+                }}
+                className={`min-h-[40px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                  !showAllTracks && activeTrack === 'literacy'
+                    ? 'bg-white dark:bg-slate-950 text-sky-700 dark:text-sky-400 shadow-sm'
+                    : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                }`}
+              >
+                <Monitor className="w-3.5 h-3.5 shrink-0" />
+                <span>Savodxonlik ({literacyCount})</span>
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={!showAllTracks && activeTrack === 'programming'}
+                onClick={() => {
+                  setShowAllTracks(false);
+                  onSelectTrack('programming');
+                }}
+                className={`min-h-[40px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                  !showAllTracks && activeTrack === 'programming'
+                    ? 'bg-white dark:bg-slate-950 text-indigo-700 dark:text-indigo-400 shadow-sm'
+                    : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                }`}
+              >
+                <Code2 className="w-3.5 h-3.5 shrink-0" />
+                <span>Dasturlash ({programmingCount})</span>
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={showAllTracks}
+                onClick={() => setShowAllTracks(true)}
+                className={`min-h-[40px] px-3 py-1.5 text-xs font-medium rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                  showAllTracks
+                    ? 'bg-white dark:bg-slate-950 text-slate-900 dark:text-white shadow-sm'
+                    : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                }`}
+              >
+                Barchasi
+              </button>
             </div>
 
             <button
@@ -213,7 +341,7 @@ export function LessonsSection({
           </div>
         </div>
 
-        {/* Focused Phone Pager Mode (No endless vertical scrolling!) */}
+        {/* Focused Phone Pager Mode */}
         {viewLayout === 'pager' && activeLesson ? (
           <div className="space-y-4">
             {/* Quick Lesson Selector Strip */}
@@ -228,7 +356,9 @@ export function LessonsSection({
                     onClick={() => setSelectedId(lesson.id)}
                     className={`min-h-[44px] inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-medium whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
                       isSelected
-                        ? 'bg-slate-900 dark:bg-sky-500 text-white dark:text-slate-950 border-slate-900 dark:border-sky-500 font-semibold'
+                        ? isProg
+                          ? 'bg-indigo-600 dark:bg-indigo-500 text-white border-indigo-600 dark:border-indigo-500 font-semibold'
+                          : 'bg-slate-900 dark:bg-sky-500 text-white dark:text-slate-950 border-slate-900 dark:border-sky-500 font-semibold'
                         : done
                           ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800'
                           : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-800'
@@ -264,7 +394,11 @@ export function LessonsSection({
                     }
                     setSelectedId(filteredLessons[activeIndex + 1].id);
                   }}
-                  className="min-h-[46px] inline-flex items-center justify-center gap-1.5 px-4 py-2.5 text-xs font-semibold text-white bg-slate-900 dark:bg-sky-500 dark:text-slate-950 hover:bg-slate-800 dark:hover:bg-sky-400 rounded-xl transition-colors cursor-pointer"
+                  className={`min-h-[46px] inline-flex items-center justify-center gap-1.5 px-4 py-2.5 text-xs font-semibold rounded-xl transition-colors cursor-pointer ${
+                    isProg
+                      ? 'text-white bg-indigo-600 hover:bg-indigo-500'
+                      : 'text-white bg-slate-900 dark:bg-sky-500 dark:text-slate-950 hover:bg-slate-800 dark:hover:bg-sky-400'
+                  }`}
                 >
                   <span>Keyingi dars</span>
                   <ChevronRight className="w-4 h-4 shrink-0" />
@@ -273,7 +407,11 @@ export function LessonsSection({
                 <button
                   type="button"
                   onClick={onStartExam}
-                  className="min-h-[46px] inline-flex items-center justify-center gap-1.5 px-4 py-2.5 text-xs font-semibold text-slate-950 bg-sky-400 hover:bg-sky-300 rounded-xl transition-colors cursor-pointer"
+                  className={`min-h-[46px] inline-flex items-center justify-center gap-1.5 px-4 py-2.5 text-xs font-semibold rounded-xl transition-colors cursor-pointer ${
+                    isProg
+                      ? 'text-white bg-indigo-600 hover:bg-indigo-500'
+                      : 'text-slate-950 bg-sky-400 hover:bg-sky-300'
+                  }`}
                 >
                   <span>Imtihonni boshlash →</span>
                 </button>
@@ -282,7 +420,6 @@ export function LessonsSection({
           </div>
         ) : (
           <>
-            {/* Visual Module Spotlights in Grid Mode */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
               <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden flex flex-col sm:flex-row items-stretch">
                 <div className="sm:w-44 aspect-[4/3] sm:aspect-auto shrink-0 bg-slate-100 dark:bg-slate-800">
@@ -294,19 +431,19 @@ export function LessonsSection({
                   />
                 </div>
                 <div className="p-5 flex flex-col justify-center">
-                  <div className="text-xs text-slate-500 dark:text-slate-400 mb-1">
-                    1-modul · {literacyCount} ta dars
+                  <div className="text-xs text-sky-700 dark:text-sky-400 font-semibold mb-1">
+                    1-yo‘nalish · {literacyCount} ta dars
                   </div>
                   <h3 className="text-lg font-semibold text-slate-900 dark:text-white mb-1.5">
                     Kompyuter savodxonligi
                   </h3>
                   <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-                    Qurilma tuzilishi, fayllar tartibi, klaviatura tugmalari va internet xavfsizligi.
+                    Apparat qismlari, OS, fayl/arxivlar, ofis, internet/DNS, xavfsizlik va AI.
                   </p>
                 </div>
               </div>
 
-              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden flex flex-col sm:flex-row items-stretch">
+              <div className="bg-white dark:bg-slate-900 border border-indigo-200/80 dark:border-indigo-900/70 rounded-2xl overflow-hidden flex flex-col sm:flex-row items-stretch">
                 <div className="sm:w-44 aspect-[4/3] sm:aspect-auto shrink-0 bg-slate-900">
                   <ResilientImage
                     src="/src/assets/images/programming_logic_visual_1795163270407.jpg"
@@ -316,14 +453,14 @@ export function LessonsSection({
                   />
                 </div>
                 <div className="p-5 flex flex-col justify-center">
-                  <div className="text-xs text-slate-500 dark:text-slate-400 mb-1">
-                    2-modul · {programmingCount} ta dars
+                  <div className="text-xs text-indigo-700 dark:text-indigo-400 font-semibold mb-1">
+                    2-yo‘nalish · {programmingCount} ta dars
                   </div>
                   <h3 className="text-lg font-semibold text-slate-900 dark:text-white mb-1.5">
                     Dasturlash asoslari
                   </h3>
                   <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-                    0 va 1 tili, algoritmlar, o‘zgaruvchilar, shart operatorlari va dasturlash tillari.
+                    0 va 1, algoritmlar, ma’lumot turlari, shart, sikl, funksiyalar va veb/API.
                   </p>
                 </div>
               </div>
@@ -335,13 +472,17 @@ export function LessonsSection({
           </>
         )}
 
-        {/* Quick Actions Footer inside Lessons Screen */}
+        {/* Quick Actions Footer */}
         <div className="mt-8 pt-6 border-t border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
           {onOpenVideos && (
             <button
               type="button"
               onClick={onOpenVideos}
-              className="min-h-[46px] inline-flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-semibold text-sky-700 dark:text-sky-300 bg-sky-50 dark:bg-sky-950/50 border border-sky-200 dark:border-sky-800 rounded-xl transition-colors cursor-pointer"
+              className={`min-h-[46px] inline-flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-semibold rounded-xl border transition-colors cursor-pointer ${
+                isProg
+                  ? 'text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/50 border-indigo-200 dark:border-indigo-800'
+                  : 'text-sky-700 dark:text-sky-300 bg-sky-50 dark:bg-sky-950/50 border-sky-200 dark:border-sky-800'
+              }`}
             >
               <Video className="w-4 h-4 shrink-0" />
               <span>Videodarslarni ko‘rish</span>
@@ -350,9 +491,13 @@ export function LessonsSection({
           <button
             type="button"
             onClick={onStartExam}
-            className="min-h-[46px] px-5 py-3 text-sm font-semibold text-white bg-slate-900 dark:bg-sky-500 dark:text-slate-950 rounded-xl hover:bg-slate-800 dark:hover:bg-sky-400 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            className={`min-h-[46px] px-5 py-3 text-sm font-semibold rounded-xl transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+              isProg
+                ? 'text-white bg-indigo-600 hover:bg-indigo-500'
+                : 'text-white bg-slate-900 dark:bg-sky-500 dark:text-slate-950 hover:bg-slate-800 dark:hover:bg-sky-400'
+            }`}
           >
-            Yakuniy imtihonga o‘tish
+            {isProg ? '20 talik Dasturlash imtihoniga o‘tish' : '20 talik Savodxonlik imtihoniga o‘tish'}
           </button>
         </div>
       </div>

@@ -1,9 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
   Circle,
+  Code2,
+  Monitor,
   Play,
   Video,
   XCircle,
@@ -14,6 +16,8 @@ import { InteractiveVideoPlayer } from './InteractiveVideoPlayer';
 interface VideoLessonsSectionProps {
   videos: VideoLessonItem[];
   watchedVideos: string[];
+  activeTrack: LessonCategory;
+  onSelectTrack: (track: LessonCategory) => void;
   onMarkWatched: (id: string, forceValue?: boolean) => void;
   onGoToLessons: () => void;
   onStartExam: () => void;
@@ -22,16 +26,29 @@ interface VideoLessonsSectionProps {
 export function VideoLessonsSection({
   videos,
   watchedVideos,
+  activeTrack,
+  onSelectTrack,
   onMarkWatched,
   onGoToLessons,
   onStartExam,
 }: VideoLessonsSectionProps) {
-  const [filter, setFilter] = useState<'all' | LessonCategory>('all');
-  const [selectedId, setSelectedId] = useState<string>(() => videos[0]?.id ?? '');
+  const [showAllTracks, setShowAllTracks] = useState(false);
+  const [selectedId, setSelectedId] = useState<string>(
+    () => videos.find((v) => v.category === activeTrack)?.id ?? videos[0]?.id ?? ''
+  );
   const [quizAnswers, setQuizAnswers] = useState<Record<string, number>>({});
 
-  const filteredVideos =
-    filter === 'all' ? videos : videos.filter((v) => v.category === filter);
+  useEffect(() => {
+    setShowAllTracks(false);
+    const firstInTrack = videos.find((v) => v.category === activeTrack);
+    if (firstInTrack) {
+      setSelectedId(firstInTrack.id);
+    }
+  }, [activeTrack, videos]);
+
+  const filteredVideos = showAllTracks
+    ? videos
+    : videos.filter((v) => v.category === activeTrack);
 
   const activeIndex = Math.max(
     0,
@@ -55,7 +72,17 @@ export function VideoLessonsSection({
     }
   };
 
-  const watchedCount = watchedVideos.filter((id) => videos.some((v) => v.id === id)).length;
+  const isProg = activeTrack === 'programming';
+  const accentLabel = isProg
+    ? 'text-indigo-700 dark:text-indigo-400'
+    : 'text-sky-700 dark:text-sky-400';
+  const activeBtnCls = isProg
+    ? 'bg-indigo-600 dark:bg-indigo-500 text-white border-indigo-600 dark:border-indigo-500'
+    : 'bg-slate-900 dark:bg-sky-500 text-white dark:text-slate-950 border-slate-900 dark:border-sky-500';
+
+  const watchedInList = watchedVideos.filter((id) =>
+    filteredVideos.some((v) => v.id === id)
+  ).length;
 
   if (!activeVideo) {
     return (
@@ -76,57 +103,79 @@ export function VideoLessonsSection({
   return (
     <section
       id="videolar"
-      className="py-6 sm:py-10 md:py-14 bg-slate-50 dark:bg-slate-950 min-h-[calc(100vh-8rem)]"
+      className="py-6 sm:py-10 md:py-12 bg-slate-50 dark:bg-slate-950 min-h-[calc(100vh-8rem)]"
     >
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
-        {/* Compact Header + Category Filter */}
+        {/* Track Header + Separate Track Tabs */}
         <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4 mb-5">
           <div>
-            <p className="text-xs sm:text-sm font-semibold text-sky-700 dark:text-sky-400 mb-1">
-              Videodarslar · Qisqa va tushunarli
+            <p className={`text-xs sm:text-sm font-semibold mb-1 ${accentLabel}`}>
+              {isProg ? 'Dasturlash videodarslari' : 'Kompyuter savodxonligi videodarslari'} ·{' '}
+              {watchedInList}/{filteredVideos.length} ko‘rildi
             </p>
             <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-slate-900 dark:text-white">
-              Ko‘rib tez o‘rganing ({watchedCount}/{videos.length})
+              {isProg
+                ? 'Dasturlash mantiqini video orqali tez o‘rganing'
+                : 'Kompyuterni video orqali tez va oson o‘rganing'}
             </h2>
           </div>
 
           <div
             role="tablist"
-            aria-label="Videodarslar bo‘limini filtrlash"
-            className="flex items-center gap-1 p-1 bg-slate-200/70 dark:bg-slate-800 rounded-lg overflow-x-auto max-w-full self-start lg:self-auto"
+            aria-label="Videodarslar yo‘nalishi"
+            className="flex items-center gap-1 p-1 bg-slate-200/80 dark:bg-slate-800 rounded-xl overflow-x-auto max-w-full self-start lg:self-auto"
           >
-            {(
-              [
-                { id: 'all', label: 'Barchasi' },
-                { id: 'literacy', label: 'Savodxonlik' },
-                { id: 'programming', label: 'Dasturlash' },
-              ] as const
-            ).map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                role="tab"
-                aria-selected={filter === tab.id}
-                onClick={() => {
-                  setFilter(tab.id);
-                  const first = (
-                    tab.id === 'all' ? videos : videos.filter((v) => v.category === tab.id)
-                  )[0];
-                  if (first) setSelectedId(first.id);
-                }}
-                className={`min-h-[40px] px-3.5 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                  filter === tab.id
-                    ? 'bg-white dark:bg-slate-950 text-slate-900 dark:text-white shadow-sm'
-                    : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
-                }`}
-              >
-                {tab.label}
-              </button>
-            ))}
+            <button
+              type="button"
+              role="tab"
+              aria-selected={!showAllTracks && activeTrack === 'literacy'}
+              onClick={() => {
+                setShowAllTracks(false);
+                onSelectTrack('literacy');
+              }}
+              className={`min-h-[40px] inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                !showAllTracks && activeTrack === 'literacy'
+                  ? 'bg-white dark:bg-slate-950 text-sky-700 dark:text-sky-400 shadow-sm'
+                  : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+              }`}
+            >
+              <Monitor className="w-3.5 h-3.5 shrink-0" />
+              <span>Savodxonlik</span>
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={!showAllTracks && activeTrack === 'programming'}
+              onClick={() => {
+                setShowAllTracks(false);
+                onSelectTrack('programming');
+              }}
+              className={`min-h-[40px] inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                !showAllTracks && activeTrack === 'programming'
+                  ? 'bg-white dark:bg-slate-950 text-indigo-700 dark:text-indigo-400 shadow-sm'
+                  : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+              }`}
+            >
+              <Code2 className="w-3.5 h-3.5 shrink-0" />
+              <span>Dasturlash</span>
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={showAllTracks}
+              onClick={() => setShowAllTracks(true)}
+              className={`min-h-[40px] px-3 py-1.5 text-xs font-medium rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                showAllTracks
+                  ? 'bg-white dark:bg-slate-950 text-slate-900 dark:text-white shadow-sm'
+                  : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+              }`}
+            >
+              Barchasi ({videos.length})
+            </button>
           </div>
         </div>
 
-        {/* Horizontal Quick-Tap Video Strip (no scrolling down!) */}
+        {/* Horizontal Quick-Tap Video Strip */}
         <div className="flex items-center gap-2 overflow-x-auto pb-3 mb-4">
           {filteredVideos.map((vid) => {
             const active = vid.id === activeVideo.id;
@@ -138,7 +187,7 @@ export function VideoLessonsSection({
                 onClick={() => handleSelectVideo(vid.id)}
                 className={`min-h-[44px] inline-flex items-center gap-2 px-3.5 py-2 rounded-xl border text-xs font-medium whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
                   active
-                    ? 'bg-slate-900 dark:bg-sky-500 text-white dark:text-slate-950 border-slate-900 dark:border-sky-500 font-semibold'
+                    ? `${activeBtnCls} font-semibold`
                     : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-800 hover:border-slate-300'
                 }`}
               >
@@ -158,7 +207,7 @@ export function VideoLessonsSection({
           })}
         </div>
 
-        {/* Main Cinema Split: Video Player (8-col) + Playlist (4-col on desktop) */}
+        {/* Main Cinema Split */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
           <div className="lg:col-span-8 space-y-4">
             <InteractiveVideoPlayer
@@ -173,7 +222,7 @@ export function VideoLessonsSection({
               <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
                 <div>
                   <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 mb-1">
-                    <span className="font-mono font-semibold text-sky-700 dark:text-sky-400 tabular-nums">
+                    <span className={`font-mono font-semibold tabular-nums ${accentLabel}`}>
                       {activeVideo.number}
                     </span>
                     <span aria-hidden="true">·</span>
@@ -221,7 +270,11 @@ export function VideoLessonsSection({
                   type="button"
                   disabled={activeIndex >= filteredVideos.length - 1}
                   onClick={handleNext}
-                  className="min-h-[44px] inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold text-white bg-slate-900 dark:bg-sky-500 dark:text-slate-950 hover:bg-slate-800 dark:hover:bg-sky-400 disabled:opacity-40 rounded-xl transition-colors cursor-pointer disabled:cursor-not-allowed"
+                  className={`min-h-[44px] inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-xl transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
+                    isProg
+                      ? 'text-white bg-indigo-600 hover:bg-indigo-500'
+                      : 'text-white bg-slate-900 dark:bg-sky-500 dark:text-slate-950 hover:bg-slate-800 dark:hover:bg-sky-400'
+                  }`}
                 >
                   <span>Keyingi video</span>
                   <ChevronRight className="w-4 h-4 shrink-0" />
@@ -229,10 +282,10 @@ export function VideoLessonsSection({
               </div>
             </div>
 
-            {/* 1-Question Quick Check right below */}
+            {/* 1-Question Quick Check */}
             <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 space-y-3">
-              <div className="text-xs font-semibold text-sky-700 dark:text-sky-400">
-                Tezkor tekshiruv · Video bo‘yicha 1 ta savol
+              <div className={`text-xs font-semibold ${accentLabel}`}>
+                Tezkor tekshiruv · Video bo‘yicha savol
               </div>
               <p className="text-sm font-semibold text-slate-900 dark:text-white leading-snug">
                 {activeVideo.quickCheck.question}
@@ -284,9 +337,7 @@ export function VideoLessonsSection({
                   ) : (
                     <>
                       <XCircle className="w-4 h-4 shrink-0" />
-                      <span>
-                        Noto‘g‘ri — to‘g‘ri javob yashil rangda ko‘rsatildi.
-                      </span>
+                      <span>Noto‘g‘ri — to‘g‘ri javob yashil rangda ko‘rsatildi.</span>
                     </>
                   )}
                 </div>
@@ -294,7 +345,7 @@ export function VideoLessonsSection({
             </div>
           </div>
 
-          {/* Right Playlist Column (Desktop) & Quick Jumps */}
+          {/* Right Playlist Column */}
           <div className="lg:col-span-4 space-y-4">
             <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden">
               <div className="px-4 py-3.5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
@@ -317,14 +368,18 @@ export function VideoLessonsSection({
                       onClick={() => handleSelectVideo(vid.id)}
                       className={`w-full min-h-[56px] px-4 py-3 flex items-center gap-3 text-left transition-colors cursor-pointer ${
                         active
-                          ? 'bg-sky-50 dark:bg-sky-950/40'
+                          ? isProg
+                            ? 'bg-indigo-50 dark:bg-indigo-950/40'
+                            : 'bg-sky-50 dark:bg-sky-950/40'
                           : 'hover:bg-slate-50 dark:hover:bg-slate-800/50'
                       }`}
                     >
                       <div
                         className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
                           active
-                            ? 'bg-sky-600 text-white'
+                            ? isProg
+                              ? 'bg-indigo-600 text-white'
+                              : 'bg-sky-600 text-white'
                             : done
                               ? 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400'
                               : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
@@ -360,14 +415,18 @@ export function VideoLessonsSection({
                 onClick={onGoToLessons}
                 className="w-full min-h-[44px] px-4 py-2 text-xs font-medium text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl transition-colors cursor-pointer"
               >
-                Matnli mini-darslarni ochish
+                {isProg ? 'Dasturlash mini-darslarini ochish' : 'Savodxonlik mini-darslarini ochish'}
               </button>
               <button
                 type="button"
                 onClick={onStartExam}
-                className="w-full min-h-[44px] px-4 py-2 text-xs font-semibold text-white bg-slate-900 dark:bg-sky-500 dark:text-slate-950 hover:bg-slate-800 dark:hover:bg-sky-400 rounded-xl transition-colors cursor-pointer"
+                className={`w-full min-h-[44px] px-4 py-2 text-xs font-semibold rounded-xl transition-colors cursor-pointer ${
+                  isProg
+                    ? 'text-white bg-indigo-600 hover:bg-indigo-500'
+                    : 'text-white bg-slate-900 dark:bg-sky-500 dark:text-slate-950 hover:bg-slate-800 dark:hover:bg-sky-400'
+                }`}
               >
-                20 talik yakuniy imtihonga o‘tish
+                {isProg ? '20 talik Dasturlash imtihoniga o‘tish' : '20 talik Savodxonlik imtihoniga o‘tish'}
               </button>
             </div>
           </div>

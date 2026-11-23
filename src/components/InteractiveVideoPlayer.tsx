@@ -686,6 +686,83 @@ function SceneMotionVisual({
     );
   }
 
+  if (visualType === 'network') {
+    const netNodes = [
+      { t: 'Brauzer', sub: 'murodillayev.dev' },
+      { t: 'DNS', sub: 'IP qidiruv' },
+      { t: 'Cloud Server', sub: '104.21.48.192' },
+    ];
+    return (
+      <div className="w-full max-w-md space-y-3">
+        <div className="grid grid-cols-3 gap-2">
+          {netNodes.map((n, idx) => {
+            const active = pulseStep % 3 === idx || sceneIndex === 3;
+            return (
+              <div
+                key={n.t}
+                className={`p-2.5 rounded-xl border text-center transition-all duration-300 ${
+                  active
+                    ? 'bg-sky-500/20 border-sky-400 text-white scale-[1.02]'
+                    : 'bg-slate-900/70 border-slate-800 text-slate-400'
+                }`}
+              >
+                <Globe className={`w-5 h-5 mx-auto mb-1 ${active ? 'text-sky-300' : 'text-slate-500'}`} />
+                <div className="font-mono text-xs font-bold">{n.t}</div>
+                <div className="text-[10px] opacity-80 truncate">{n.sub}</div>
+              </div>
+            );
+          })}
+        </div>
+        <div className="text-center font-mono text-xs font-semibold text-sky-300 bg-slate-900/90 border border-slate-800 rounded-lg py-2 px-3">
+          {highlightText}
+        </div>
+      </div>
+    );
+  }
+
+  if (visualType === 'functions') {
+    const activePart = pulseStep % 3;
+    return (
+      <div className="w-full max-w-md space-y-3">
+        <div className="grid grid-cols-3 gap-2 items-center">
+          <div
+            className={`p-2.5 rounded-xl border text-center transition-all duration-300 ${
+              activePart === 0
+                ? 'bg-indigo-500/25 border-indigo-400 text-white'
+                : 'bg-slate-900/70 border-slate-800 text-slate-400'
+            }`}
+          >
+            <div className="font-mono text-[11px] font-bold">Parametr</div>
+            <div className="font-mono text-xs mt-1">(10, 5)</div>
+          </div>
+          <div
+            className={`p-2.5 rounded-xl border text-center transition-all duration-300 ${
+              activePart === 1
+                ? 'bg-indigo-500/25 border-indigo-400 text-white'
+                : 'bg-slate-900/70 border-slate-800 text-slate-400'
+            }`}
+          >
+            <div className="font-mono text-[11px] font-bold">yigindi()</div>
+            <div className="font-mono text-xs mt-1">a + b</div>
+          </div>
+          <div
+            className={`p-2.5 rounded-xl border text-center transition-all duration-300 ${
+              activePart === 2 || sceneIndex === 3
+                ? 'bg-emerald-500/25 border-emerald-400 text-emerald-200'
+                : 'bg-slate-900/70 border-slate-800 text-slate-400'
+            }`}
+          >
+            <div className="font-mono text-[11px] font-bold">return</div>
+            <div className="font-mono text-xs mt-1">15</div>
+          </div>
+        </div>
+        <div className="text-center font-mono text-xs font-semibold text-indigo-300 bg-slate-900/90 border border-slate-800 rounded-lg py-2 px-3">
+          {highlightText}
+        </div>
+      </div>
+    );
+  }
+
   // loops_web
   return (
     <div className="w-full max-w-md space-y-3">
