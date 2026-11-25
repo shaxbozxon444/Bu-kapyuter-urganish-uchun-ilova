@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   ArrowLeft,
   Award,
@@ -6,9 +6,11 @@ import {
   BookOpen,
   CheckCircle2,
   ClipboardList,
+  Clock,
   Download,
   HelpCircle,
   LayoutDashboard,
+  Lock,
   Moon,
   Pencil,
   Plus,
@@ -18,6 +20,8 @@ import {
   Sun,
   Trash2,
   Trophy,
+  Unlock,
+  Users,
   Video,
   X,
   XCircle,
@@ -32,6 +36,13 @@ import type {
   VideoLessonItem,
   VideoVisualType,
 } from '../data/curriculum';
+import type { UserProfileDoc } from '../services/firestoreService';
+import {
+  EXAM_SCOPE_LABELS,
+  formatRemainingCountdown,
+  formatUnlockClock,
+  isExamScopeLocked,
+} from '../utils/examCooldown';
 import { CertificatePreviewModal } from './CertificatePreviewModal';
 import type { ExamAttemptRecord, ExamScope } from './FinalExamSection';
 
@@ -55,6 +66,8 @@ interface AdminPanelProps {
   examResults: ExamAttemptRecord[];
   issuedCertificates: CertificateRecord[];
   examAttempts: Record<ExamScope, number>;
+  examLockedUntil: Record<ExamScope, number>;
+  cloudUsers?: UserProfileDoc[];
   maxAttempts: number;
   isDark: boolean;
   onToggleTheme: () => void;
@@ -65,6 +78,7 @@ interface AdminPanelProps {
   onSaveGlossary: (next: GlossaryTerm[]) => void;
   onSaveCertificates: (next: CertificateRecord[]) => void;
   onResetExamAttempts: (scope?: ExamScope) => void;
+  onUnlockCloudUserExam?: (targetUser: UserProfileDoc, scope?: ExamScope) => void;
   onClearResults: () => void;
   onResetDefaults: () => void;
   onExitAdmin: () => void;
@@ -124,6 +138,8 @@ export function AdminPanel({
   examResults,
   issuedCertificates,
   examAttempts,
+  examLockedUntil,
+  cloudUsers = [],
   maxAttempts,
   isDark,
   onToggleTheme,
@@ -134,6 +150,7 @@ export function AdminPanel({
   onSaveGlossary,
   onSaveCertificates,
   onResetExamAttempts,
+  onUnlockCloudUserExam,
   onClearResults,
   onResetDefaults,
   onExitAdmin,
@@ -145,11 +162,32 @@ export function AdminPanel({
   const [confirmReset, setConfirmReset] = useState(false);
   const [confirmClearResults, setConfirmClearResults] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | number | null>(null);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  const scopesOrder: ExamScope[] = ['literacy', 'programming', 'all'];
+  const hasLocalLock = scopesOrder.some((s) => isExamScopeLocked(examLockedUntil[s], nowMs));
+  const hasCloudLock = cloudUsers.some((u) =>
+    scopesOrder.some((s) => isExamScopeLocked(u.examLockedUntil?.[s], nowMs))
+  );
+
+  useEffect(() => {
+    if (!hasLocalLock && !hasCloudLock) return;
+    const t = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(t);
+  }, [hasLocalLock, hasCloudLock]);
+
+  const localLockedScopes = scopesOrder.filter((s) => isExamScopeLocked(examLockedUntil[s], nowMs));
+  const lockedCloudUsers = cloudUsers.filter((u) =>
+    scopesOrder.some(
+      (s) =>
+        isExamScopeLocked(u.examLockedUntil?.[s], nowMs) || (u.examAttempts?.[s] ?? 0) >= maxAttempts
+    )
+  );
 
   // Certificate issue & preview state
   const [certIssueAttempt, setCertIssueAttempt] = useState<ExamAttemptRecord | null>(null);
   const [certStudentName, setCertStudentName] = useState('');
-  const [certIssuerName, setCertIssuerName] = useState('Murodillayev · murodillayev_dev');
+  const [certIssuerName, setCertIssuerName] = useState('BilimKod · murodillayev_dev');
   const [previewCertificate, setPreviewCertificate] = useState<CertificateRecord | null>(null);
 
   // Lesson modal state
@@ -299,7 +337,7 @@ export function AdminPanel({
     }
     setCertIssueAttempt(attempt);
     setCertStudentName(attempt.studentName);
-    setCertIssuerName('Murodillayev · murodillayev_dev');
+    setCertIssuerName('BilimKod · murodillayev_dev');
   };
 
   const handleConfirmIssueCertificate = (e: React.FormEvent) => {
@@ -924,9 +962,9 @@ export function AdminPanel({
               className="text-lg font-bold tracking-tight text-white"
               style={{ fontFamily: 'var(--font-display)' }}
             >
-              murodillayev_dev
+              BilimKod
             </div>
-            <div className="text-xs text-slate-400">Admin boshqaruv paneli</div>
+            <div className="text-xs text-slate-400">murodillayev_dev · Admin panel</div>
           </div>
         </div>
 
@@ -1100,6 +1138,52 @@ export function AdminPanel({
                   </div>
                 </div>
               </div>
+
+              {(localLockedScopes.length > 0 || lockedCloudUsers.length > 0) && (
+                <div className="bg-rose-50 dark:bg-rose-950/35 border border-rose-200 dark:border-rose-800/80 rounded-xl p-5 space-y-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="flex items-start gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-rose-100 dark:bg-rose-900/60 text-rose-700 dark:text-rose-300 flex items-center justify-center shrink-0">
+                        <Lock className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h2 className="text-sm sm:text-base font-bold text-rose-950 dark:text-rose-100">
+                          24 soatga bloklangan imtihonlar aniqlandi
+                        </h2>
+                        <p className="text-xs text-rose-800 dark:text-rose-200/90 mt-0.5">
+                          3 marta yiqilgan o‘quvchilar uchun imtihonni shu yerdan darhol ochishingiz mumkin.
+                        </p>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => handleTabChange('results')}
+                      className="min-h-[40px] px-3.5 py-2 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-lg whitespace-nowrap shrink-0 cursor-pointer self-start sm:self-auto"
+                    >
+                      Bloklarni boshqarish →
+                    </button>
+                  </div>
+
+                  {localLockedScopes.length > 0 && (
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      {localLockedScopes.map((scope) => (
+                        <button
+                          key={scope}
+                          type="button"
+                          onClick={() => onResetExamAttempts(scope)}
+                          className="min-h-[40px] inline-flex items-center gap-2 px-3 py-1.5 text-xs font-semibold text-emerald-900 dark:text-emerald-200 bg-white dark:bg-slate-900 border border-emerald-300 dark:border-emerald-700 hover:bg-emerald-50 rounded-lg cursor-pointer"
+                        >
+                          <Unlock className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                          <span>
+                            {EXAM_SCOPE_LABELS[scope]} ({formatRemainingCountdown(examLockedUntil[scope], nowMs)}) — Ochish
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
                 <div className="lg:col-span-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-3">
@@ -1939,32 +2023,170 @@ export function AdminPanel({
                 )}
               </div>
 
-              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 sm:p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-                <div>
-                  <h2 className="text-sm font-semibold text-slate-900 dark:text-white">
-                    Imtihon imkoniyatlari nazorati (har bir yo‘nalishga {maxAttempts} marta)
-                  </h2>
-                  <div className="mt-2 flex flex-wrap items-center gap-4 text-xs font-mono tabular-nums text-slate-600 dark:text-slate-300">
-                    <span>
-                      Savodxonlik: {examAttempts.literacy ?? 0}/{maxAttempts}
-                    </span>
-                    <span>
-                      Dasturlash: {examAttempts.programming ?? 0}/{maxAttempts}
-                    </span>
-                    <span>
-                      Umumiy: {examAttempts.all ?? 0}/{maxAttempts}
+              {/* 24-Hour Lock & Exam Attempts Control */}
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 sm:p-5 space-y-4">
+                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                  <div>
+                    <h2 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
+                      Imtihon imkoniyatlari va 24 soatlik blok nazorati
+                    </h2>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                      3 marta yiqilganda imtihon 24 soatga yopiladi. Admin istalgan vaqtda blokni ochishi mumkin.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onResetExamAttempts()}
+                    className="min-h-[42px] inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer self-start lg:self-auto"
+                  >
+                    <Unlock className="w-3.5 h-3.5 shrink-0" />
+                    <span>Barcha imtihonlarni ochish (3/3)</span>
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  {scopesOrder.map((scope) => {
+                    const lockedUntil = examLockedUntil[scope] ?? 0;
+                    const locked = isExamScopeLocked(lockedUntil, nowMs);
+                    const used = locked ? maxAttempts : (examAttempts[scope] ?? 0);
+                    const left = locked ? 0 : Math.max(0, maxAttempts - used);
+                    return (
+                      <div
+                        key={scope}
+                        className={`p-3.5 rounded-xl border flex flex-col justify-between gap-3 ${
+                          locked
+                            ? 'bg-rose-50/70 dark:bg-rose-950/30 border-rose-200 dark:border-rose-800'
+                            : 'bg-slate-50 dark:bg-slate-950 border-slate-200 dark:border-slate-800'
+                        }`}
+                      >
+                        <div>
+                          <div className="text-xs font-semibold text-slate-900 dark:text-white">
+                            {EXAM_SCOPE_LABELS[scope]}
+                          </div>
+                          {locked ? (
+                            <div className="mt-1 space-y-0.5">
+                              <div className="inline-flex items-center gap-1 text-xs font-bold text-rose-700 dark:text-rose-400">
+                                <Clock className="w-3.5 h-3.5" />
+                                <span>24 soatlik blokda</span>
+                              </div>
+                              <div className="text-sm font-mono font-bold tabular-nums text-rose-800 dark:text-rose-300">
+                                {formatRemainingCountdown(lockedUntil, nowMs)}
+                              </div>
+                              <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                                Ochiladi: {formatUnlockClock(lockedUntil)}
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="mt-1 text-xs font-mono tabular-nums text-slate-600 dark:text-slate-300">
+                              Qolgan: {left}/{maxAttempts} · Ishlatilgan: {used}
+                            </div>
+                          )}
+                        </div>
+
+                        {(locked || used > 0) && (
+                          <button
+                            type="button"
+                            onClick={() => onResetExamAttempts(scope)}
+                            className="w-full min-h-[38px] inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors cursor-pointer"
+                          >
+                            <Unlock className="w-3.5 h-3.5" />
+                            <span>{locked ? '24 soatlik blokni ochish' : 'Urinishlarni tiklash'}</span>
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Cloud Students 24h Lock Management (for Firebase Admin) */}
+              {cloudUsers.length > 0 && onUnlockCloudUserExam && (
+                <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+                  <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <Users className="w-4 h-4 text-sky-600 dark:text-sky-400" />
+                      <h2 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
+                        Bulutli o‘quvchilar imtihon holati ({cloudUsers.length} ta)
+                      </h2>
+                    </div>
+                    <span className="text-xs text-slate-500 dark:text-slate-400">
+                      Bloklanganlar: {lockedCloudUsers.length} ta
                     </span>
                   </div>
+
+                  <div className="divide-y divide-slate-200 dark:divide-slate-800">
+                    {cloudUsers.map((student) => {
+                      const studentLockedScopes = scopesOrder.filter((s) =>
+                        isExamScopeLocked(student.examLockedUntil?.[s], nowMs)
+                      );
+                      const hasUsedAny = scopesOrder.some((s) => (student.examAttempts?.[s] ?? 0) > 0);
+                      return (
+                        <div
+                          key={student.uid}
+                          className="p-4 sm:px-5 flex flex-col md:flex-row md:items-center justify-between gap-3"
+                        >
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-sm font-bold text-slate-900 dark:text-white">
+                                {student.displayName}
+                              </span>
+                              {studentLockedScopes.length > 0 && (
+                                <span className="text-xs font-semibold text-rose-600 dark:text-rose-400">
+                                  · 24 soatga bloklangan
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-xs text-slate-500 dark:text-slate-400 truncate">
+                              {student.email || student.uid}
+                            </div>
+                            <div className="mt-1.5 flex flex-wrap gap-3 text-[11px] font-mono tabular-nums text-slate-600 dark:text-slate-300">
+                              {scopesOrder.map((s) => {
+                                const lockTs = student.examLockedUntil?.[s] ?? 0;
+                                const isLk = isExamScopeLocked(lockTs, nowMs);
+                                return (
+                                  <span
+                                    key={s}
+                                    className={isLk ? 'text-rose-600 dark:text-rose-400 font-semibold' : ''}
+                                  >
+                                    {EXAM_SCOPE_LABELS[s]}:{' '}
+                                    {isLk
+                                      ? `Blok (${formatRemainingCountdown(lockTs, nowMs)})`
+                                      : `${student.examAttempts?.[s] ?? 0}/${maxAttempts}`}
+                                  </span>
+                                );
+                              })}
+                            </div>
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-2 shrink-0">
+                            {studentLockedScopes.map((s) => (
+                              <button
+                                key={s}
+                                type="button"
+                                onClick={() => onUnlockCloudUserExam(student, s)}
+                                className="min-h-[38px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg cursor-pointer"
+                              >
+                                <Unlock className="w-3.5 h-3.5" />
+                                <span>{EXAM_SCOPE_LABELS[s]} ochish</span>
+                              </button>
+                            ))}
+                            {hasUsedAny && (
+                              <button
+                                type="button"
+                                onClick={() => onUnlockCloudUserExam(student)}
+                                className="min-h-[38px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-800 dark:text-slate-100 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg cursor-pointer"
+                              >
+                                <RotateCcw className="w-3.5 h-3.5" />
+                                <span>Barchasini tiklash</span>
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => onResetExamAttempts()}
-                  className="min-h-[40px] inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-800 dark:text-slate-100 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer self-start lg:self-auto"
-                >
-                  <RotateCcw className="w-3.5 h-3.5 shrink-0" />
-                  <span>Barcha imkoniyatlarni tiklash (3 ta)</span>
-                </button>
-              </div>
+              )}
 
               <div className="relative max-w-md">
                 <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />

@@ -160,7 +160,7 @@ export function AuthModal({ open, onClose, onSuccess }: AuthModalProps) {
                 : 'Parolni tiklash'}
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              murodillayev_dev · Natijalar doimiy saqlanadi
+              BilimKod · murodillayev_dev · Natijalar doimiy saqlanadi
             </p>
           </div>
           <button

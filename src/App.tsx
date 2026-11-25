@@ -1,27 +1,24 @@
-import { Suspense, lazy, useEffect, useState } from 'react';
+import { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { onAuthStateChanged, signOut, type User } from 'firebase/auth';
 import {
   ArrowRight,
   Award,
-  BookA,
   BookOpen,
   Bot,
+  CheckCircle2,
   ClipboardCheck,
   Code2,
-  Compass,
-  Flame,
-  HelpCircle,
+  Keyboard,
   Lock,
   LogIn,
   Menu,
   Monitor,
-  ShieldCheck,
   Terminal,
   UserCheck,
   Video,
 } from 'lucide-react';
 import type { ExamAttemptRecord, ExamScope } from './components/FinalExamSection';
-import { MobileBottomNav, type AppScreenId } from './components/MobileBottomNav';
+import type { AppScreenId } from './components/MobileBottomNav';
 import { ResilientImage } from './components/ResilientImage';
 import { StudentSidebar, type SidebarDestination } from './components/StudentSidebar';
 
@@ -61,6 +58,11 @@ const LessonsSection = lazy(() =>
 const RoadmapSection = lazy(() =>
   import('./components/RoadmapSection').then((m) => ({ default: m.RoadmapSection }))
 );
+const RulesAndShortcutsSection = lazy(() =>
+  import('./components/RulesAndShortcutsSection').then((m) => ({
+    default: m.RulesAndShortcutsSection,
+  }))
+);
 const VideoLessonsSection = lazy(() =>
   import('./components/VideoLessonsSection').then((m) => ({ default: m.VideoLessonsSection }))
 );
@@ -89,6 +91,7 @@ import {
 } from './data/curriculum';
 import { auth } from './firebase';
 import {
+  adminUnlockUserExam,
   deleteCertificateDoc,
   ensureUserProfile,
   isFirebaseBootstrapAdmin,
@@ -96,12 +99,19 @@ import {
   saveCertificateDoc,
   saveCurriculumOverride,
   saveExamResultDoc,
+  subscribeAllUsersForAdmin,
   subscribeCertificates,
   subscribeExamResults,
   subscribeUserProfile,
   updateUserProgress,
   type PersistedExamResult,
+  type UserProfileDoc,
 } from './services/firestoreService';
+import {
+  EXAM_COOLDOWN_MS,
+  formatRemainingCountdown,
+  isExamScopeLocked,
+} from './utils/examCooldown';
 
 const MAX_EXAM_ATTEMPTS = 3;
 
@@ -115,13 +125,22 @@ const STORAGE_EXAM = 'kodsavod_exam_v4';
 const STORAGE_GLOSSARY = 'kodsavod_glossary_v3';
 const STORAGE_RESULTS = 'kodsavod_results_v2';
 const STORAGE_EXAM_ATTEMPTS = 'kodsavod_exam_attempts_v1';
+const STORAGE_EXAM_LOCKS = 'kodsavod_exam_locks_v1';
 const STORAGE_CERTIFICATES = 'kodsavod_certificates_v1';
 const STORAGE_THEME = 'kodsavod_theme_v1';
 const STORAGE_TRACK = 'kodsavod_active_track_v1';
+const STORAGE_MASTERED_RULES = 'codecraft_mastered_rules_v1';
+const LEGACY_MASTERED_RULES = 'novacode_mastered_rules_v1';
 
 type MashqSubTab = 'lab' | 'masalalar' | 'aiustoz' | 'bilasizmi' | 'lugat';
 
 const DEFAULT_ATTEMPTS: Record<ExamScope, number> = {
+  literacy: 0,
+  programming: 0,
+  all: 0,
+};
+
+const DEFAULT_LOCKS: Record<ExamScope, number> = {
   literacy: 0,
   programming: 0,
   all: 0,
@@ -169,8 +188,8 @@ export default function App() {
   const [focusedLessonId, setFocusedLessonId] = useState<string | null>(null);
 
   const [authUser, setAuthUser] = useState<User | null>(null);
-  const [authReady, setAuthReady] = useState(false);
   const [profileDisplayName, setProfileDisplayName] = useState<string | null>(null);
+  const pendingExamSavesRef = useRef<Map<string, Promise<void>>>(new Map());
 
   const [activeTrack, setActiveTrack] = useState<LessonCategory>(() => {
     try {
@@ -218,6 +237,19 @@ export default function App() {
       all: typeof saved.all === 'number' ? saved.all : 0,
     };
   });
+  const [examLockedUntil, setExamLockedUntil] = useState<Record<ExamScope, number>>(() => {
+    const saved = loadFromStorage<Partial<Record<ExamScope, number>>>(
+      STORAGE_EXAM_LOCKS,
+      DEFAULT_LOCKS
+    );
+    return {
+      literacy: typeof saved.literacy === 'number' ? saved.literacy : 0,
+      programming: typeof saved.programming === 'number' ? saved.programming : 0,
+      all: typeof saved.all === 'number' ? saved.all : 0,
+    };
+  });
+  const [cloudUsers, setCloudUsers] = useState<UserProfileDoc[]>([]);
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const [issuedCertificates, setIssuedCertificates] = useState<CertificateRecord[]>(() =>
     loadFromStorage(STORAGE_CERTIFICATES, [])
   );
@@ -230,6 +262,11 @@ export default function App() {
   const [solvedChallenges, setSolvedChallenges] = useState<string[]>(() =>
     loadFromStorage(STORAGE_SOLVED_CHALLENGES, [])
   );
+  const [masteredRules, setMasteredRules] = useState<string[]>(() => {
+    const primary = loadFromStorage<string[]>(STORAGE_MASTERED_RULES, []);
+    if (primary.length > 0) return primary;
+    return loadFromStorage<string[]>(LEGACY_MASTERED_RULES, []);
+  });
 
   // Load any admin curriculum override stored in Firestore on boot
   useEffect(() => {
@@ -258,17 +295,19 @@ export default function App() {
     let unsubProfile: (() => void) | undefined;
     let unsubResults: (() => void) | undefined;
     let unsubCerts: (() => void) | undefined;
+    let unsubAdminUsers: (() => void) | undefined;
 
     const unsubAuth = onAuthStateChanged(auth, async (user) => {
       unsubProfile?.();
       unsubResults?.();
       unsubCerts?.();
+      unsubAdminUsers?.();
 
       setAuthUser(user);
-      setAuthReady(true);
 
       if (!user) {
         setProfileDisplayName(null);
+        setCloudUsers([]);
         return;
       }
 
@@ -280,6 +319,7 @@ export default function App() {
           watchedVideos,
           solvedChallenges,
           examAttempts,
+          examLockedUntil,
         });
 
         setProfileDisplayName(profile.displayName);
@@ -287,6 +327,7 @@ export default function App() {
         setWatchedVideos(profile.watchedVideos);
         setSolvedChallenges(profile.solvedChallenges);
         setExamAttempts(profile.examAttempts);
+        setExamLockedUntil(profile.examLockedUntil);
         setActiveTrack(profile.activeTrack);
 
         unsubProfile = subscribeUserProfile(user.uid, (nextProfile) => {
@@ -295,6 +336,7 @@ export default function App() {
           setWatchedVideos(nextProfile.watchedVideos);
           setSolvedChallenges(nextProfile.solvedChallenges);
           setExamAttempts(nextProfile.examAttempts);
+          setExamLockedUntil(nextProfile.examLockedUntil);
           setActiveTrack(nextProfile.activeTrack);
         });
 
@@ -306,6 +348,14 @@ export default function App() {
         unsubCerts = subscribeCertificates(user.uid, adminUser, (certs) => {
           setIssuedCertificates(certs);
         });
+
+        if (adminUser) {
+          unsubAdminUsers = subscribeAllUsersForAdmin((users) => {
+            setCloudUsers(users);
+          });
+        } else {
+          setCloudUsers([]);
+        }
       } catch (err) {
         console.error('Failed to initialize user cloud profile:', err);
       }
@@ -316,6 +366,7 @@ export default function App() {
       unsubProfile?.();
       unsubResults?.();
       unsubCerts?.();
+      unsubAdminUsers?.();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -395,6 +446,48 @@ export default function App() {
 
   useEffect(() => {
     try {
+      localStorage.setItem(STORAGE_EXAM_LOCKS, JSON.stringify(examLockedUntil));
+    } catch {
+      // Ignore storage quota errors
+    }
+  }, [examLockedUntil]);
+
+  const hasAnyActiveExamLock =
+    examLockedUntil.literacy > 0 ||
+    examLockedUntil.programming > 0 ||
+    examLockedUntil.all > 0;
+
+  useEffect(() => {
+    if (!hasAnyActiveExamLock) return;
+    const interval = window.setInterval(() => {
+      const current = Date.now();
+      setNowMs(current);
+
+      const expiredScopes = (['literacy', 'programming', 'all'] as ExamScope[]).filter(
+        (s) => examLockedUntil[s] > 0 && current >= examLockedUntil[s]
+      );
+      if (expiredScopes.length > 0) {
+        const nextLocks = { ...examLockedUntil };
+        const nextAttempts = { ...examAttempts };
+        for (const s of expiredScopes) {
+          nextLocks[s] = 0;
+          nextAttempts[s] = 0;
+        }
+        setExamLockedUntil(nextLocks);
+        setExamAttempts(nextAttempts);
+        if (authUser) {
+          void updateUserProgress(authUser.uid, {
+            examAttempts: nextAttempts,
+            examLockedUntil: nextLocks,
+          });
+        }
+      }
+    }, 1000);
+    return () => window.clearInterval(interval);
+  }, [hasAnyActiveExamLock, examLockedUntil, examAttempts, authUser]);
+
+  useEffect(() => {
+    try {
       localStorage.setItem(STORAGE_CERTIFICATES, JSON.stringify(issuedCertificates));
     } catch {
       // Ignore storage quota errors
@@ -424,6 +517,20 @@ export default function App() {
       // Ignore storage quota errors
     }
   }, [solvedChallenges]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_MASTERED_RULES, JSON.stringify(masteredRules));
+    } catch {
+      // Ignore storage quota errors
+    }
+  }, [masteredRules]);
+
+  const handleToggleMasteredRule = (id: string) => {
+    setMasteredRules((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+    );
+  };
 
   const handleSelectTrack = (track: LessonCategory) => {
     setActiveTrack(track);
@@ -489,16 +596,41 @@ export default function App() {
     });
   };
 
-  const handleResetExamAttempts = (scope?: ExamScope) => {
-    setExamAttempts((prev) => {
-      const next: Record<ExamScope, number> = !scope
-        ? { literacy: 0, programming: 0, all: 0 }
-        : { ...prev, [scope]: 0 };
+  const handleLockExam24h = (scope: ExamScope) => {
+    const unlockAt = Date.now() + EXAM_COOLDOWN_MS;
+    setNowMs(Date.now());
+    setExamLockedUntil((prev) => {
+      const next: Record<ExamScope, number> = {
+        ...prev,
+        [scope]: unlockAt,
+      };
       if (authUser) {
-        void updateUserProgress(authUser.uid, { examAttempts: next });
+        void updateUserProgress(authUser.uid, { examLockedUntil: next });
       }
       return next;
     });
+  };
+
+  const handleResetExamAttempts = (scope?: ExamScope) => {
+    const nextAttempts: Record<ExamScope, number> = !scope
+      ? { literacy: 0, programming: 0, all: 0 }
+      : { ...examAttempts, [scope]: 0 };
+    const nextLocks: Record<ExamScope, number> = !scope
+      ? { literacy: 0, programming: 0, all: 0 }
+      : { ...examLockedUntil, [scope]: 0 };
+
+    setExamAttempts(nextAttempts);
+    setExamLockedUntil(nextLocks);
+    if (authUser) {
+      void updateUserProgress(authUser.uid, {
+        examAttempts: nextAttempts,
+        examLockedUntil: nextLocks,
+      });
+    }
+  };
+
+  const handleUnlockCloudUserExam = (targetUser: UserProfileDoc, scope?: ExamScope) => {
+    void adminUnlockUserExam(targetUser, scope);
   };
 
   const handleRecordResult = (record: ExamAttemptRecord) => {
@@ -508,7 +640,25 @@ export default function App() {
     };
     setExamResults((prev) => [enriched, ...prev]);
     if (authUser) {
-      void saveExamResultDoc(authUser.uid, record);
+      const savePromise = saveExamResultDoc(authUser.uid, record)
+        .catch((err) => {
+          console.error('Failed to persist exam result:', err);
+        })
+        .finally(() => {
+          pendingExamSavesRef.current.delete(record.id);
+        });
+      pendingExamSavesRef.current.set(record.id, savePromise);
+    }
+  };
+
+  const handleCreateStudentCertificate = async (cert: CertificateRecord) => {
+    setIssuedCertificates((prev) => [cert, ...prev.filter((c) => c.id !== cert.id)]);
+    if (authUser) {
+      const pendingExamWrite = pendingExamSavesRef.current.get(cert.attemptId);
+      if (pendingExamWrite) {
+        await pendingExamWrite;
+      }
+      await saveCertificateDoc(cert, authUser.uid, cert.attemptId);
     }
   };
 
@@ -599,8 +749,10 @@ export default function App() {
       setWatchedVideos([]);
       setSolvedChallenges([]);
       setExamAttempts({ literacy: 0, programming: 0, all: 0 });
+      setExamLockedUntil({ literacy: 0, programming: 0, all: 0 });
       setExamResults([]);
       setIssuedCertificates([]);
+      setCloudUsers([]);
       setCornerMenuOpen(false);
     } catch (err) {
       console.error('Sign out failed:', err);
@@ -670,8 +822,17 @@ export default function App() {
     trackChallenges.some((c) => c.id === id)
   ).length;
 
-  const trackUsedAttempts = examAttempts[activeTrack] ?? 0;
-  const remainingAttemptsForTrack = Math.max(0, MAX_EXAM_ATTEMPTS - trackUsedAttempts);
+  const activeTrackLockedUntil = examLockedUntil[activeTrack] ?? 0;
+  const isTrackExamLocked = isExamScopeLocked(activeTrackLockedUntil, nowMs);
+  const trackUsedAttempts = isTrackExamLocked
+    ? MAX_EXAM_ATTEMPTS
+    : (examAttempts[activeTrack] ?? 0);
+  const remainingAttemptsForTrack = isTrackExamLocked
+    ? 0
+    : Math.max(0, MAX_EXAM_ATTEMPTS - trackUsedAttempts);
+  const trackLockCountdownText = isTrackExamLocked
+    ? formatRemainingCountdown(activeTrackLockedUntil, nowMs)
+    : undefined;
 
   const literacyStats = {
     videos: videoLessons.filter((v) => v.category === 'literacy').length,
@@ -701,6 +862,8 @@ export default function App() {
           examResults={examResults}
           issuedCertificates={issuedCertificates}
           examAttempts={examAttempts}
+          examLockedUntil={examLockedUntil}
+          cloudUsers={cloudUsers}
           maxAttempts={MAX_EXAM_ATTEMPTS}
           isDark={isDark}
           onToggleTheme={() => setIsDark((prev) => !prev)}
@@ -756,6 +919,7 @@ export default function App() {
           }}
           onSaveCertificates={handleSaveCertificates}
           onResetExamAttempts={handleResetExamAttempts}
+          onUnlockCloudUserExam={handleUnlockCloudUserExam}
           onClearResults={() => setExamResults([])}
           onResetDefaults={handleResetDefaults}
           onExitAdmin={() => {
@@ -769,73 +933,66 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 pb-20 lg:pb-0">
-      {/* Minimal Clean Top Bar — Menu in Top-Left Corner */}
+    <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
+      {/* Very Top Bar — Only Brand Name */}
       <header
-        className={`sticky top-0 z-40 border-b text-white transition-colors ${
+        className={`border-b text-white transition-colors ${
           isProg
             ? 'bg-slate-950 border-indigo-900/60'
             : 'bg-slate-900 border-slate-800'
         }`}
       >
-        <div className="max-w-6xl mx-auto px-3 sm:px-6 lg:px-8 h-14 lg:h-16 flex items-center justify-between gap-2.5">
-          {/* Left Corner: Menu Button + Brand Wordmark + Active Track Tag */}
-          <div className="flex items-center gap-2.5 min-w-0">
-            <button
-              type="button"
-              aria-label="Chap burchak menyusini ochish"
-              onClick={() => setCornerMenuOpen(true)}
-              className={`min-h-[42px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                isProg
-                  ? 'bg-indigo-500 hover:bg-indigo-400 text-white'
-                  : 'bg-sky-400 hover:bg-sky-300 text-slate-950'
-              }`}
-            >
-              <Menu className="w-4 h-4 shrink-0" />
-              <span>Menyu</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => navigateScreen('kirish')}
-              className="text-base sm:text-xl font-bold tracking-tight text-white whitespace-nowrap truncate cursor-pointer"
-              style={{ fontFamily: 'var(--font-display)' }}
-            >
-              murodillayev_dev
-            </button>
-            <span
-              className={`hidden sm:inline-block text-[11px] font-medium whitespace-nowrap ${
-                isProg ? 'text-indigo-300' : 'text-sky-300'
-              }`}
-            >
-              · {isProg ? 'Dasturlash' : 'Savodxonlik'}
-            </span>
-          </div>
-
-          {/* Right Corner: Account Quick Trigger */}
-          <div className="flex items-center gap-2 shrink-0">
-            <button
-              type="button"
-              onClick={() => (authUser ? setCornerMenuOpen(true) : setAuthModalOpen(true))}
-              className="min-h-[42px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-200 hover:text-white bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              {authUser ? (
-                <>
-                  <UserCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                  <span className="max-w-[92px] sm:max-w-[140px] truncate">
-                    {profileDisplayName || authUser.displayName || 'Akkaunt'}
-                  </span>
-                </>
-              ) : (
-                <>
-                  <LogIn className="w-3.5 h-3.5 text-sky-400 shrink-0" />
-                  <span>Kirish</span>
-                </>
-              )}
-            </button>
-          </div>
+        <div className="max-w-6xl mx-auto px-3.5 sm:px-6 lg:px-8 h-11 flex items-center justify-center sm:justify-start">
+          <button
+            type="button"
+            onClick={() => navigateScreen('kirish')}
+            className="text-base sm:text-lg font-bold tracking-tight text-white whitespace-nowrap truncate cursor-pointer"
+            style={{ fontFamily: 'var(--font-display)' }}
+          >
+            BilimKod
+          </button>
         </div>
       </header>
+
+      {/* Upper Menu Strip — Directly Below Brand Name Bar */}
+      <div className="sticky top-0 z-40 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-b border-slate-200/80 dark:border-slate-800">
+        <div className="max-w-6xl mx-auto px-3.5 sm:px-6 lg:px-8 h-11 flex items-center justify-between gap-2">
+          <button
+            type="button"
+            aria-label="Menyuni ochish"
+            aria-expanded={cornerMenuOpen}
+            onClick={() => setCornerMenuOpen((prev) => !prev)}
+            className={`min-h-[34px] inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-lg border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+              isProg
+                ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800 hover:bg-indigo-100 dark:hover:bg-indigo-950'
+                : 'bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-100 border-slate-200 dark:border-slate-700 hover:bg-slate-200/80 dark:hover:bg-slate-700'
+            }`}
+          >
+            <Menu className="w-3.5 h-3.5 shrink-0" />
+            <span>Menyu</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => (authUser ? setCornerMenuOpen(true) : setAuthModalOpen(true))}
+            className="min-h-[34px] inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-slate-700 dark:text-slate-200 hover:text-slate-950 dark:hover:text-white bg-slate-100 dark:bg-slate-800 hover:bg-slate-200/80 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            {authUser ? (
+              <>
+                <UserCheck className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                <span className="max-w-[100px] sm:max-w-[140px] truncate">
+                  {profileDisplayName || authUser.displayName || 'Akkaunt'}
+                </span>
+              </>
+            ) : (
+              <>
+                <LogIn className="w-3.5 h-3.5 text-sky-600 dark:text-sky-400 shrink-0" />
+                <span>Kirish</span>
+              </>
+            )}
+          </button>
+        </div>
+      </div>
 
       {/* Corner Slide-Over Menu Drawer (holds all moved top-bar items, track switcher, AI Ustoz, account & Admin) */}
       <StudentSidebar
@@ -850,6 +1007,8 @@ export default function App() {
         examCount={examQuestions.length}
         remainingAttemptsForTrack={remainingAttemptsForTrack}
         maxAttempts={MAX_EXAM_ATTEMPTS}
+        isTrackExamLocked={isTrackExamLocked}
+        lockedRemainingText={trackLockCountdownText}
         certificateCount={issuedCertificates.length}
         activeDestination={activeDestination}
         activeTrack={activeTrack}
@@ -883,33 +1042,11 @@ export default function App() {
       {/* Main Content */}
       <div className="flex-1 min-w-0 flex flex-col">
         <main className="flex-1">
-          {/* Cloud Account Banner if not signed in yet */}
-          {authReady && !authUser && activeScreen === 'kirish' && (
-            <div className="bg-emerald-950 text-emerald-100 border-b border-emerald-900/70 px-4 sm:px-6 lg:px-8 py-2.5">
-              <div className="max-w-5xl mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
-                <div className="flex items-center gap-2">
-                  <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
-                  <span>
-                    Darslar, masalalar, imtihon urinishlari va sertifikatlar o‘chib ketmasligi
-                    uchun login-parol bilan akkauntga kiring.
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setAuthModalOpen(true)}
-                  className="self-start sm:self-auto px-3 py-1.5 font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-                >
-                  Akkauntga kirish / Ro‘yxatdan o‘tish
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Screen 1: Kirish / Dual-Track Launchpad */}
+          {/* Screen 1: Clean Mobile-First Launchpad */}
           {activeScreen === 'kirish' && (
             <div className="bg-slate-50 dark:bg-slate-950">
               <section
-                className={`text-white pt-6 pb-9 sm:pt-11 sm:pb-13 transition-colors ${
+                className={`text-white pt-6 pb-8 sm:pt-10 sm:pb-12 transition-colors ${
                   isProg
                     ? 'bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900'
                     : 'bg-slate-900'
@@ -923,9 +1060,7 @@ export default function App() {
                           isProg ? 'text-indigo-400' : 'text-sky-400'
                         }`}
                       >
-                        {isProg
-                          ? '2-YO‘NALISH · DASTURLASH ASOSLARI MUHITI'
-                          : '1-YO‘NALISH · KOMPYUTER SAVODXONLIGI'}
+                        BilimKod · murodillayev_dev
                       </p>
                       <h1 className="text-2xl sm:text-4xl lg:text-5xl font-bold tracking-tight text-white leading-[1.15] text-balance mb-3.5 sm:mb-4">
                         {isProg
@@ -934,38 +1069,38 @@ export default function App() {
                       </h1>
                       <p className="text-sm sm:text-base text-slate-300 leading-relaxed mb-6 max-w-xl">
                         {isProg
-                          ? '0 va 1 tili, algoritmlar, kod tahlili, sikl va massiv masalalari, fikr beruvchi AI Ustoz, 3 martalik qattiq imtihon va rasmiy sertifikat.'
-                          : 'Kompyuter arxitekturasi, fayl tizimlari, Excel formulalari, DNS/tarmoq va kiberxavfsizlik — AI Ustoz yordami, 3 martalik imtihon va rasmiy sertifikat.'}
+                          ? '0 va 1 tili, algoritmlar, sikl va massiv masalalari, fikr beruvchi AI Ustoz hamda tezkor rasm sertifikat.'
+                          : 'Kompyuter arxitekturasi, fayl tizimlari, Excel formulalari, kiberxavfsizlik, AI Ustoz va rasmiy rasm sertifikat.'}
                       </p>
 
                       <div className="flex flex-col sm:flex-row sm:items-center gap-3">
                         <button
                           type="button"
-                          onClick={() => navigateScreen('yolxarita')}
+                          onClick={() => navigateScreen('darslar')}
                           className={`w-full sm:w-auto min-h-[48px] inline-flex items-center justify-center gap-2 px-6 py-3.5 text-sm font-semibold active:scale-[0.99] rounded-xl sm:rounded-lg transition-all whitespace-nowrap shrink-0 cursor-pointer ${
                             isProg
                               ? 'text-white bg-indigo-500 hover:bg-indigo-400'
                               : 'text-slate-950 bg-sky-400 hover:bg-sky-300'
                           }`}
                         >
-                          <Compass className="w-4 h-4 shrink-0" />
-                          <span>O‘rganishni boshlash</span>
+                          <BookOpen className="w-4 h-4 shrink-0" />
+                          <span>Darslarni boshlash</span>
                         </button>
 
                         <button
                           type="button"
-                          onClick={() => navigateScreen('aiustoz')}
+                          onClick={() => navigateScreen('sertifikat')}
                           className="w-full sm:w-auto min-h-[48px] inline-flex items-center justify-center gap-2 px-5 py-3.5 text-sm font-medium text-slate-200 hover:text-white border border-slate-700 hover:border-slate-500 active:scale-[0.99] rounded-xl sm:rounded-lg transition-all whitespace-nowrap shrink-0 cursor-pointer"
                         >
-                          <Bot className="w-4 h-4 shrink-0" />
-                          <span>AI Ustozdan fikr olish</span>
+                          <Award className="w-4 h-4 shrink-0" />
+                          <span>Natija va Imkoniyatim</span>
                           <ArrowRight className="w-4 h-4 shrink-0" />
                         </button>
                       </div>
                     </div>
 
                     <div className="lg:col-span-6">
-                      <div className="h-full min-h-[190px] sm:min-h-[250px] rounded-2xl overflow-hidden border border-slate-800 bg-slate-800">
+                      <div className="h-full min-h-[180px] sm:min-h-[240px] rounded-2xl overflow-hidden border border-slate-800 bg-slate-800">
                         <ResilientImage
                           src={
                             isProg
@@ -989,8 +1124,8 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* Track-specific 4-Column Quick Stats */}
-                  <div className="mt-7 sm:mt-10 pt-5 border-t border-slate-800/90 grid grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
+                  {/* Clean 4-Column Quick Stats */}
+                  <div className="mt-7 sm:mt-9 pt-5 border-t border-slate-800/90 grid grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
                     <div>
                       <div className="text-xl sm:text-2xl font-bold font-mono tabular-nums text-white">
                         {trackWatchedVideos}/{trackVideos.length}
@@ -1012,191 +1147,139 @@ export default function App() {
                         {trackSolvedChallenges}/{trackChallenges.length}
                       </div>
                       <div className="text-xs sm:text-sm text-slate-400 mt-0.5">
-                        Yechilgan qiyin masalalar
+                        Yechilgan masalalar
                       </div>
                     </div>
                     <div>
                       <div className="text-xl sm:text-2xl font-bold font-mono tabular-nums text-white">
-                        {remainingAttemptsForTrack} / {MAX_EXAM_ATTEMPTS}
+                        {isTrackExamLocked
+                          ? trackLockCountdownText
+                          : `${remainingAttemptsForTrack} / ${MAX_EXAM_ATTEMPTS}`}
                       </div>
                       <div className="text-xs sm:text-sm text-slate-400 mt-0.5">
-                        Qolgan imtihon imkoniyati
+                        {isTrackExamLocked
+                          ? '24 soatlik blok'
+                          : 'Imtihon imkoniyati'}
                       </div>
                     </div>
                   </div>
                 </div>
               </section>
 
-              {/* Dedicated Track Selector Cards + Quick App Launchpad */}
-              <section className="py-6 sm:py-9">
-                <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 space-y-7">
+              {/* Track Selector + Clean 6-Tile Mobile Launchpad */}
+              <section className="py-5 sm:py-8">
+                <div className="max-w-5xl mx-auto px-3.5 sm:px-6 lg:px-8 space-y-6">
                   <div>
-                    <div className="mb-3">
-                      <h2 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-white">
-                        Alohida o‘quv yo‘nalishlari (Tema)
+                    <div className="mb-2.5">
+                      <h2 className="text-base sm:text-xl font-bold text-slate-900 dark:text-white">
+                        O‘quv yo‘nalishi
                       </h2>
-                      <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400">
-                        Savodxonlik va Dasturlash alohida bo‘limlarga ajratilgan — har birida
-                        3 martagacha imtihon topshirish imkoniyati mavjud
+                      <p className="text-xs text-slate-500 dark:text-slate-400">
+                        Yo‘nalishni tanlang — alohida darslar va 3 martalik imtihon
                       </p>
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="grid grid-cols-2 gap-2.5 sm:gap-4">
                       <button
                         type="button"
                         onClick={() => handleSelectTrackAndGo('literacy')}
-                        className={`text-left p-5 rounded-2xl border-2 transition-all cursor-pointer flex flex-col justify-between gap-3 ${
+                        className={`text-left p-3.5 sm:p-5 rounded-xl border transition-all cursor-pointer flex flex-col justify-between gap-2.5 ${
                           !isProg
-                            ? 'bg-white dark:bg-slate-900 border-sky-500 shadow-sm'
+                            ? 'bg-white dark:bg-slate-900 border-sky-500 ring-1 ring-sky-500/20 shadow-xs'
                             : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-sky-300'
                         }`}
                       >
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="w-11 h-11 rounded-xl bg-sky-50 dark:bg-sky-950/60 text-sky-700 dark:text-sky-400 flex items-center justify-center shrink-0">
-                            <Monitor className="w-6 h-6" />
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-lg bg-sky-50 dark:bg-sky-950/60 text-sky-700 dark:text-sky-400 flex items-center justify-center shrink-0">
+                            <Monitor className="w-4 h-4 sm:w-5 sm:h-5" />
                           </div>
-                          <span
-                            className={`text-xs font-semibold px-2.5 py-1 rounded-lg ${
-                              !isProg
-                                ? 'bg-sky-100 dark:bg-sky-950 text-sky-800 dark:text-sky-300'
-                                : 'bg-slate-100 dark:bg-slate-800 text-slate-500'
-                            }`}
-                          >
-                            {!isProg ? 'Tanlangan' : 'Tanlash'}
-                          </span>
+                          {!isProg && (
+                            <span className="inline-flex items-center gap-1 text-[11px] sm:text-xs font-semibold text-sky-700 dark:text-sky-400">
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              <span className="hidden sm:inline">Faol</span>
+                            </span>
+                          )}
                         </div>
                         <div>
-                          <h3 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white">
-                            1. Kompyuter savodxonligi
+                          <h3 className="text-[13px] sm:text-base font-bold text-slate-900 dark:text-white leading-snug">
+                            Kompyuter savodxonligi
                           </h3>
-                          <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 mt-1 leading-relaxed">
-                            CPU/RAM/SSD, Fayl/ZIP, Excel formulalari, DNS/HTTP, Kiberxavfsizlik va
-                            AI savodxonligi.
+                          <p className="hidden sm:block text-xs text-slate-600 dark:text-slate-300 mt-1 leading-relaxed">
+                            CPU/RAM/SSD, Fayl/ZIP, Excel formulalari, DNS/HTTP va kiberxavfsizlik.
                           </p>
                         </div>
-                        <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex flex-wrap gap-2.5 text-xs font-mono text-slate-500 dark:text-slate-400">
-                          <span>{literacyStats.videos} video</span>
-                          <span>·</span>
-                          <span>{literacyStats.lessons} dars</span>
-                          <span>·</span>
-                          <span>{literacyStats.challenges} masala</span>
-                          <span>·</span>
-                          <span>{literacyStats.exam} test</span>
+                        <div className="pt-2 border-t border-slate-100 dark:border-slate-800 text-[11px] sm:text-xs font-mono tabular-nums text-slate-500 dark:text-slate-400">
+                          {literacyStats.lessons} dars · {literacyStats.exam} test
                         </div>
                       </button>
 
                       <button
                         type="button"
                         onClick={() => handleSelectTrackAndGo('programming')}
-                        className={`text-left p-5 rounded-2xl border-2 transition-all cursor-pointer flex flex-col justify-between gap-3 ${
+                        className={`text-left p-3.5 sm:p-5 rounded-xl border transition-all cursor-pointer flex flex-col justify-between gap-2.5 ${
                           isProg
-                            ? 'bg-white dark:bg-slate-900 border-indigo-500 shadow-sm'
+                            ? 'bg-white dark:bg-slate-900 border-indigo-500 ring-1 ring-indigo-500/20 shadow-xs'
                             : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-indigo-300'
                         }`}
                       >
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="w-11 h-11 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-400 flex items-center justify-center shrink-0">
-                            <Code2 className="w-6 h-6" />
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-400 flex items-center justify-center shrink-0">
+                            <Code2 className="w-4 h-4 sm:w-5 sm:h-5" />
                           </div>
-                          <span
-                            className={`text-xs font-semibold px-2.5 py-1 rounded-lg ${
-                              isProg
-                                ? 'bg-indigo-100 dark:bg-indigo-950 text-indigo-800 dark:text-indigo-300'
-                                : 'bg-slate-100 dark:bg-slate-800 text-slate-500'
-                            }`}
-                          >
-                            {isProg ? 'Tanlangan' : 'Tanlash'}
-                          </span>
+                          {isProg && (
+                            <span className="inline-flex items-center gap-1 text-[11px] sm:text-xs font-semibold text-indigo-700 dark:text-indigo-400">
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              <span className="hidden sm:inline">Faol</span>
+                            </span>
+                          )}
                         </div>
                         <div>
-                          <h3 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white">
-                            2. Dasturlash asoslari (Alohida tema)
+                          <h3 className="text-[13px] sm:text-base font-bold text-slate-900 dark:text-white leading-snug">
+                            Dasturlash asoslari
                           </h3>
-                          <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 mt-1 leading-relaxed">
-                            0 va 1 tili, Algoritmlar, shart va sikl tahlili, Funksiyalar,
-                            Massiv/JSON va Veb-dasturlash.
+                          <p className="hidden sm:block text-xs text-slate-600 dark:text-slate-300 mt-1 leading-relaxed">
+                            0 va 1 tili, algoritmlar, sikl tahlili, funksiyalar, massivlar va veb.
                           </p>
                         </div>
-                        <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex flex-wrap gap-2.5 text-xs font-mono text-slate-500 dark:text-slate-400">
-                          <span>{programmingStats.videos} video</span>
-                          <span>·</span>
-                          <span>{programmingStats.lessons} dars</span>
-                          <span>·</span>
-                          <span>{programmingStats.challenges} masala</span>
-                          <span>·</span>
-                          <span>{programmingStats.exam} test</span>
+                        <div className="pt-2 border-t border-slate-100 dark:border-slate-800 text-[11px] sm:text-xs font-mono tabular-nums text-slate-500 dark:text-slate-400">
+                          {programmingStats.lessons} dars · {programmingStats.exam} test
                         </div>
                       </button>
                     </div>
                   </div>
 
-                  {/* Quick App Grid */}
-                  <div>
-                    <div className="mb-3">
-                      <h2 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-white">
-                        {isProg
-                          ? 'Dasturlash bo‘limlari (Tezkor kirish)'
-                          : 'Savodxonlik bo‘limlari (Tezkor kirish)'}
+                  {/* Clean 6-Tile App Grid */}
+                  <div className="space-y-3">
+                    <div>
+                      <h2 className="text-base sm:text-xl font-bold text-slate-900 dark:text-white">
+                        {isProg ? 'Dasturlash bo‘limlari' : 'Savodxonlik bo‘limlari'}
                       </h2>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">
+                        Kerakli bo‘limni bitta bosishda oching
+                      </p>
                     </div>
 
-                    <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
-                      <button
-                        type="button"
-                        onClick={() => navigateDestination('aiustoz')}
-                        className="text-left p-4 sm:p-5 bg-white dark:bg-slate-900 border border-sky-200 dark:border-sky-900/60 hover:border-sky-400 dark:hover:border-indigo-500 rounded-2xl transition-colors cursor-pointer flex flex-col justify-between gap-3"
-                      >
-                        <div className="w-10 h-10 rounded-xl bg-sky-50 dark:bg-sky-950/60 text-sky-700 dark:text-sky-400 flex items-center justify-center">
-                          <Bot className="w-5 h-5" />
-                        </div>
-                        <div>
-                          <div className="text-sm sm:text-base font-semibold text-slate-900 dark:text-white">
-                            AI Ustoz (Fikr beruvchi)
-                          </div>
-                          <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                            Javobsiz, faqat yo‘naltiruvchi fikr
-                          </div>
-                        </div>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => navigateDestination('yolxarita')}
-                        className="text-left p-4 sm:p-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-sky-400 dark:hover:border-indigo-500 rounded-2xl transition-colors cursor-pointer flex flex-col justify-between gap-3"
-                      >
-                        <div className="w-10 h-10 rounded-xl bg-sky-50 dark:bg-sky-950/60 text-sky-700 dark:text-sky-400 flex items-center justify-center">
-                          <Compass className="w-5 h-5" />
-                        </div>
-                        <div>
-                          <div className="text-sm sm:text-base font-semibold text-slate-900 dark:text-white">
-                            O‘quv yo‘l xaritasi
-                          </div>
-                          <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                            5 bosqichli tayyorgarlik rejasi
-                          </div>
-                        </div>
-                      </button>
-
+                    <div className="grid grid-cols-2 lg:grid-cols-3 gap-2.5 sm:gap-3.5">
                       <button
                         type="button"
                         onClick={() => navigateDestination('videolar')}
-                        className="text-left p-4 sm:p-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-sky-400 dark:hover:border-indigo-500 rounded-2xl transition-colors cursor-pointer flex flex-col justify-between gap-3"
+                        className="text-left p-3 sm:p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-sky-400 dark:hover:border-indigo-500 rounded-xl transition-colors cursor-pointer flex flex-col justify-between gap-2.5"
                       >
                         <div
-                          className={`w-10 h-10 rounded-xl flex items-center justify-center ${
+                          className={`w-8 h-8 sm:w-9 sm:h-9 rounded-lg flex items-center justify-center ${
                             isProg
                               ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-400'
                               : 'bg-sky-50 dark:bg-sky-950/60 text-sky-700 dark:text-sky-400'
                           }`}
                         >
-                          <Video className="w-5 h-5" />
+                          <Video className="w-4 h-4" />
                         </div>
                         <div>
-                          <div className="text-sm sm:text-base font-semibold text-slate-900 dark:text-white">
+                          <div className="text-[13px] sm:text-sm font-semibold text-slate-900 dark:text-white">
                             Videodarslar
                           </div>
-                          <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                            {trackVideos.length} ta animatsion video
+                          <div className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 mt-0.5 tabular-nums">
+                            {trackVideos.length} ta video
                           </div>
                         </div>
                       </button>
@@ -1204,35 +1287,35 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => navigateDestination('darslar')}
-                        className="text-left p-4 sm:p-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-sky-400 dark:hover:border-indigo-500 rounded-2xl transition-colors cursor-pointer flex flex-col justify-between gap-3"
+                        className="text-left p-3 sm:p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-sky-400 dark:hover:border-indigo-500 rounded-xl transition-colors cursor-pointer flex flex-col justify-between gap-2.5"
                       >
-                        <div className="w-10 h-10 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-400 flex items-center justify-center">
-                          <BookOpen className="w-5 h-5" />
+                        <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-400 flex items-center justify-center">
+                          <BookOpen className="w-4 h-4" />
                         </div>
                         <div>
-                          <div className="text-sm sm:text-base font-semibold text-slate-900 dark:text-white">
+                          <div className="text-[13px] sm:text-sm font-semibold text-slate-900 dark:text-white">
                             Mini-darslar
                           </div>
-                          <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                            {trackLessons.length} ta chuqur dars
+                          <div className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 mt-0.5 tabular-nums">
+                            {trackLessons.length} ta dars
                           </div>
                         </div>
                       </button>
 
                       <button
                         type="button"
-                        onClick={() => navigateDestination('masalalar')}
-                        className="text-left p-4 sm:p-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-amber-400 dark:hover:border-amber-500 rounded-2xl transition-colors cursor-pointer flex flex-col justify-between gap-3"
+                        onClick={() => navigateDestination('qoidalar')}
+                        className="text-left p-3 sm:p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-sky-400 rounded-xl transition-colors cursor-pointer flex flex-col justify-between gap-2.5"
                       >
-                        <div className="w-10 h-10 rounded-xl bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-400 flex items-center justify-center">
-                          <Flame className="w-5 h-5" />
+                        <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-lg bg-sky-50 dark:bg-sky-950/60 text-sky-700 dark:text-sky-400 flex items-center justify-center">
+                          <Keyboard className="w-4 h-4" />
                         </div>
                         <div>
-                          <div className="text-sm sm:text-base font-semibold text-slate-900 dark:text-white">
-                            Qiyin masalalar
+                          <div className="text-[13px] sm:text-sm font-semibold text-slate-900 dark:text-white">
+                            Qoidalar &amp; Ctrl+Shift
                           </div>
-                          <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                            {trackChallenges.length} ta amaliy tahlil mashqi
+                          <div className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-1">
+                            Tezkor tugmalar
                           </div>
                         </div>
                       </button>
@@ -1240,185 +1323,17 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => navigateDestination('lab')}
-                        className="text-left p-4 sm:p-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-sky-400 dark:hover:border-indigo-500 rounded-2xl transition-colors cursor-pointer flex flex-col justify-between gap-3"
+                        className="text-left p-3 sm:p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-emerald-400 rounded-xl transition-colors cursor-pointer flex flex-col justify-between gap-2.5"
                       >
-                        <div className="w-10 h-10 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 flex items-center justify-center">
-                          <Terminal className="w-5 h-5" />
+                        <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 flex items-center justify-center">
+                          <Terminal className="w-4 h-4" />
                         </div>
                         <div>
-                          <div className="text-sm sm:text-base font-semibold text-slate-900 dark:text-white">
-                            Amaliy laboratoriya
+                          <div className="text-[13px] sm:text-sm font-semibold text-slate-900 dark:text-white">
+                            Mashq va Lab
                           </div>
-                          <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                            {isProg ? 'Jonli kod sinagichi' : 'Xotira, tez terish va xavfsizlik'}
-                          </div>
-                        </div>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => navigateDestination('bilasizmi')}
-                        className="text-left p-4 sm:p-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-sky-400 dark:hover:border-indigo-500 rounded-2xl transition-colors cursor-pointer flex flex-col justify-between gap-3"
-                      >
-                        <div className="w-10 h-10 rounded-xl bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-400 flex items-center justify-center">
-                          <HelpCircle className="w-5 h-5" />
-                        </div>
-                        <div>
-                          <div className="text-sm sm:text-base font-semibold text-slate-900 dark:text-white">
-                            Bilasizmi?
-                          </div>
-                          <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                            {trackDyk.length} ta mantiqiy savol-javob
-                          </div>
-                        </div>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => navigateDestination('lugat')}
-                        className="text-left p-4 sm:p-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-sky-400 dark:hover:border-indigo-500 rounded-2xl transition-colors cursor-pointer flex flex-col justify-between gap-3"
-                      >
-                        <div className="w-10 h-10 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 flex items-center justify-center">
-                          <BookA className="w-5 h-5" />
-                        </div>
-                        <div>
-                          <div className="text-sm sm:text-base font-semibold text-slate-900 dark:text-white">
-                            IT Lug‘at
-                          </div>
-                          <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                            {trackGlossary.length} ta asosiy atama
-                          </div>
-                        </div>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => navigateDestination('sertifikat')}
-                        className="text-left p-4 sm:p-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-emerald-400 dark:hover:border-emerald-500 rounded-2xl transition-colors cursor-pointer flex flex-col justify-between gap-3"
-                      >
-                        <div className="w-10 h-10 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 flex items-center justify-center">
-                          <Award className="w-5 h-5" />
-                        </div>
-                        <div>
-                          <div className="text-sm sm:text-base font-semibold text-slate-900 dark:text-white">
-                            Sertifikatlarim
-                          </div>
-                          <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                            {issuedCertificates.length} ta tasdiqlangan sertifikat
-                          </div>
-                        </div>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => navigateDestination('imtihon')}
-                        className={`col-span-2 lg:col-span-3 text-left p-4 sm:p-5 rounded-2xl border transition-colors cursor-pointer flex items-center justify-between gap-4 ${
-                          isProg
-                            ? 'bg-indigo-600 text-white border-indigo-600 hover:bg-indigo-500'
-                            : 'bg-slate-900 dark:bg-sky-500 text-white dark:text-slate-950 border-slate-900 dark:border-sky-500 hover:bg-slate-800 dark:hover:bg-sky-400'
-                        }`}
-                      >
-                        <div className="flex items-center gap-3.5">
-                          <div className="w-11 h-11 rounded-xl bg-white/15 dark:bg-slate-950/15 flex items-center justify-center shrink-0">
-                            <ClipboardCheck className="w-5 h-5" />
-                          </div>
-                          <div>
-                            <div className="text-sm sm:text-base font-semibold">
-                              Yakuniy imtihon ({trackExamQuestions.length} ta savol)
-                            </div>
-                            <div className="text-xs opacity-85 mt-0.5">
-                              Qolgan imkoniyat: {remainingAttemptsForTrack} / {MAX_EXAM_ATTEMPTS} ·
-                              O‘tish bali: 75%+
-                            </div>
-                          </div>
-                        </div>
-                        <ArrowRight className="w-5 h-5 shrink-0" />
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Engaging Topic Illustrations Gallery */}
-                  <div className="cv-auto">
-                    <div className="mb-3 flex items-end justify-between gap-3">
-                      <div>
-                        <h2 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-white">
-                          Qiziqarli mavzular galereyasi
-                        </h2>
-                        <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400">
-                          Har bir rasm ustiga bosib tegishli bo‘limni darhol oching
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5 sm:gap-4">
-                      <button
-                        type="button"
-                        onClick={() => handleSelectTrackAndGo('literacy', 'darslar')}
-                        className="group text-left bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-sky-400 rounded-2xl overflow-hidden transition-colors cursor-pointer flex flex-col"
-                      >
-                        <div className="aspect-[4/3] w-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
-                          <ResilientImage
-                            src="/src/assets/images/computer_hardware_diagram_1795163268376.jpg"
-                            alt="Kompyuter ichki qismlari: CPU, RAM va SSD sxemasi"
-                            fallbackTitle="Apparat qismlari"
-                            className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
-                          />
-                        </div>
-                        <div className="p-3.5">
-                          <div className="text-xs font-semibold text-sky-700 dark:text-sky-400">
-                            Savodxonlik
-                          </div>
-                          <div className="text-sm font-bold text-slate-900 dark:text-white mt-0.5">
-                            CPU, RAM va SSD qanday ishlaydi?
-                          </div>
-                        </div>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => handleSelectTrackAndGo('literacy', 'darslar')}
-                        className="group text-left bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-sky-400 rounded-2xl overflow-hidden transition-colors cursor-pointer flex flex-col"
-                      >
-                        <div className="aspect-[4/3] w-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
-                          <ResilientImage
-                            src="/src/assets/images/spreadsheet_network_lab_1795425391913.jpg"
-                            alt="Excel jadvallari, formulalar va internet DNS tarmog‘i illyustratsiyasi"
-                            fallbackTitle="Excel va Internet"
-                            className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
-                          />
-                        </div>
-                        <div className="p-3.5">
-                          <div className="text-xs font-semibold text-sky-700 dark:text-sky-400">
-                            Ofis va Tarmoq
-                          </div>
-                          <div className="text-sm font-bold text-slate-900 dark:text-white mt-0.5">
-                            Excel formulalari va DNS sirlari
-                          </div>
-                        </div>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => {
-                          handleSelectTrack('literacy');
-                          navigateDestination('masalalar');
-                        }}
-                        className="group text-left bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-emerald-400 rounded-2xl overflow-hidden transition-colors cursor-pointer flex flex-col"
-                      >
-                        <div className="aspect-[4/3] w-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
-                          <ResilientImage
-                            src="/src/assets/images/cyber_security_shield_1795425392051.jpg"
-                            alt="Kiberxavfsizlik, kuchli parollar va fishingdan himoya qalqoni"
-                            fallbackTitle="Kiberxavfsizlik"
-                            className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
-                          />
-                        </div>
-                        <div className="p-3.5">
-                          <div className="text-xs font-semibold text-emerald-700 dark:text-emerald-400">
-                            Himoya va Tahlil
-                          </div>
-                          <div className="text-sm font-bold text-slate-900 dark:text-white mt-0.5">
-                            Kiberxavfsizlik va qiyin masalalar
+                          <div className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 mt-0.5 tabular-nums">
+                            {trackChallenges.length} ta masala
                           </div>
                         </div>
                       </button>
@@ -1426,26 +1341,73 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => navigateDestination('aiustoz')}
-                        className="group text-left bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-indigo-400 rounded-2xl overflow-hidden transition-colors cursor-pointer flex flex-col"
+                        className="text-left p-3 sm:p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-sky-400 rounded-xl transition-colors cursor-pointer flex flex-col justify-between gap-2.5"
                       >
-                        <div className="aspect-[4/3] w-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
-                          <ResilientImage
-                            src="/src/assets/images/ai_mentor_learning_1795425392617.jpg"
-                            alt="AI Ustoz bilan birga fikrlash va mustaqil kod yozish illyustratsiyasi"
-                            fallbackTitle="AI Ustoz"
-                            className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
-                          />
+                        <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-lg bg-sky-50 dark:bg-sky-950/60 text-sky-700 dark:text-sky-400 flex items-center justify-center">
+                          <Bot className="w-4 h-4" />
                         </div>
-                        <div className="p-3.5">
-                          <div className="text-xs font-semibold text-indigo-700 dark:text-indigo-400">
-                            Sokratik Mentor
+                        <div>
+                          <div className="text-[13px] sm:text-sm font-semibold text-slate-900 dark:text-white">
+                            AI Ustoz
                           </div>
-                          <div className="text-sm font-bold text-slate-900 dark:text-white mt-0.5">
-                            AI Ustozdan yo‘naltiruvchi fikr
+                          <div className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-1">
+                            Yo‘naltiruvchi fikr
+                          </div>
+                        </div>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => navigateDestination('sertifikat')}
+                        className="text-left p-3 sm:p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-emerald-400 rounded-xl transition-colors cursor-pointer flex flex-col justify-between gap-2.5"
+                      >
+                        <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 flex items-center justify-center">
+                          <Award className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <div className="text-[13px] sm:text-sm font-semibold text-slate-900 dark:text-white">
+                            Natijam va Sertifikat
+                          </div>
+                          <div className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 mt-0.5 tabular-nums">
+                            {examResults.length} urinish · {issuedCertificates.length} sertifikat
                           </div>
                         </div>
                       </button>
                     </div>
+
+                    {/* Clean Primary Exam Action Bar */}
+                    <button
+                      type="button"
+                      onClick={() => navigateDestination('imtihon')}
+                      className={`w-full text-left p-3.5 sm:p-4 rounded-xl border transition-colors cursor-pointer flex items-center justify-between gap-3 ${
+                        isTrackExamLocked
+                          ? 'bg-rose-950 text-white border-rose-800 hover:bg-rose-900'
+                          : isProg
+                            ? 'bg-indigo-600 text-white border-indigo-600 hover:bg-indigo-500'
+                            : 'bg-slate-900 dark:bg-sky-500 text-white dark:text-slate-950 border-slate-900 dark:border-sky-500 hover:bg-slate-800 dark:hover:bg-sky-400'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="w-9 h-9 rounded-lg bg-white/15 dark:bg-slate-950/15 flex items-center justify-center shrink-0">
+                          {isTrackExamLocked ? (
+                            <Lock className="w-4 h-4 text-rose-300" />
+                          ) : (
+                            <ClipboardCheck className="w-4 h-4" />
+                          )}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="text-[13px] sm:text-sm font-semibold truncate">
+                            Imtihon imkoniyatini tekshirish ({trackExamQuestions.length} savol)
+                          </div>
+                          <div className="text-[11px] sm:text-xs opacity-90 mt-0.5 font-mono tabular-nums truncate">
+                            {isTrackExamLocked
+                              ? `3 marta yiqilgan · ${trackLockCountdownText}`
+                              : `Imkoniyat: ${remainingAttemptsForTrack} / ${MAX_EXAM_ATTEMPTS} · O‘tish: 75%+`}
+                          </div>
+                        </div>
+                      </div>
+                      <ArrowRight className="w-4 h-4 shrink-0" />
+                    </button>
                   </div>
                 </div>
               </section>
@@ -1503,6 +1465,15 @@ export default function App() {
               />
             )}
 
+            {/* Screen 3b: Bolalar uchun Qoidalar va Ctrl+Shift tugmalari */}
+            {activeScreen === 'qoidalar' && (
+              <RulesAndShortcutsSection
+                masteredIds={masteredRules}
+                onToggleMastered={handleToggleMasteredRule}
+                onGoToLessons={() => navigateScreen('darslar')}
+              />
+            )}
+
             {/* Screen 4: Mashqlar Workspace */}
             {activeScreen === 'mashq' && (
               <div className="bg-slate-50 dark:bg-slate-950">
@@ -1511,14 +1482,14 @@ export default function App() {
                     <div
                       role="tablist"
                       aria-label="Mashq bo‘limlari"
-                      className="grid grid-cols-2 sm:grid-cols-5 gap-1.5 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl w-full"
+                      className="flex overflow-x-auto sm:grid sm:grid-cols-5 gap-1.5 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl w-full"
                     >
                       <button
                         type="button"
                         role="tab"
                         aria-selected={mashqSubTab === 'lab'}
                         onClick={() => setMashqSubTab('lab')}
-                        className={`min-h-[42px] px-3 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap cursor-pointer ${
+                        className={`min-h-[42px] px-3.5 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                           mashqSubTab === 'lab'
                             ? 'bg-white dark:bg-slate-950 text-slate-900 dark:text-white shadow-sm'
                             : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
@@ -1531,7 +1502,7 @@ export default function App() {
                         role="tab"
                         aria-selected={mashqSubTab === 'masalalar'}
                         onClick={() => setMashqSubTab('masalalar')}
-                        className={`min-h-[42px] px-3 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap cursor-pointer ${
+                        className={`min-h-[42px] px-3.5 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                           mashqSubTab === 'masalalar'
                             ? 'bg-white dark:bg-slate-950 text-slate-900 dark:text-white shadow-sm'
                             : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
@@ -1544,7 +1515,7 @@ export default function App() {
                         role="tab"
                         aria-selected={mashqSubTab === 'aiustoz'}
                         onClick={() => setMashqSubTab('aiustoz')}
-                        className={`min-h-[42px] px-3 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap cursor-pointer ${
+                        className={`min-h-[42px] px-3.5 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                           mashqSubTab === 'aiustoz'
                             ? 'bg-white dark:bg-slate-950 text-slate-900 dark:text-white shadow-sm'
                             : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
@@ -1557,7 +1528,7 @@ export default function App() {
                         role="tab"
                         aria-selected={mashqSubTab === 'bilasizmi'}
                         onClick={() => setMashqSubTab('bilasizmi')}
-                        className={`min-h-[42px] px-3 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap cursor-pointer ${
+                        className={`min-h-[42px] px-3.5 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                           mashqSubTab === 'bilasizmi'
                             ? 'bg-white dark:bg-slate-950 text-slate-900 dark:text-white shadow-sm'
                             : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
@@ -1570,7 +1541,7 @@ export default function App() {
                         role="tab"
                         aria-selected={mashqSubTab === 'lugat'}
                         onClick={() => setMashqSubTab('lugat')}
-                        className={`min-h-[42px] px-3 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap cursor-pointer ${
+                        className={`min-h-[42px] px-3.5 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                           mashqSubTab === 'lugat'
                             ? 'bg-white dark:bg-slate-950 text-slate-900 dark:text-white shadow-sm'
                             : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
@@ -1623,95 +1594,64 @@ export default function App() {
                 questions={examQuestions}
                 activeTrack={activeTrack}
                 examAttempts={examAttempts}
+                examLockedUntil={examLockedUntil}
+                examResults={examResults}
+                issuedCertificates={issuedCertificates}
+                defaultStudentName={profileDisplayName || authUser?.displayName || ''}
+                readinessSummary={{
+                  lessonsDone: trackCompletedLessons,
+                  lessonsTotal: trackLessons.length,
+                  videosDone: trackWatchedVideos,
+                  videosTotal: trackVideos.length,
+                  challengesDone: trackSolvedChallenges,
+                  challengesTotal: trackChallenges.length,
+                }}
                 maxAttempts={MAX_EXAM_ATTEMPTS}
                 onConsumeAttempt={handleConsumeAttempt}
+                onLockExam24h={handleLockExam24h}
                 onRecordResult={handleRecordResult}
+                onCreateCertificate={handleCreateStudentCertificate}
                 onBackToLessons={() => navigateScreen('darslar')}
                 onGoToChallenges={() => navigateDestination('masalalar')}
                 onGoToCertificates={() => navigateScreen('sertifikat')}
+                onOpenAdmin={() => void openAdminWithAuth()}
               />
             )}
 
-            {/* Screen 6: Sertifikatlarim */}
+            {/* Screen 6: Natijalarim, Imkoniyat va Sertifikatlar */}
             {activeScreen === 'sertifikat' && (
               <CertificatesSection
                 certificates={issuedCertificates}
                 examResults={examResults}
                 examAttempts={examAttempts}
+                examLockedUntil={examLockedUntil}
                 maxAttempts={MAX_EXAM_ATTEMPTS}
-                onGoToExam={() => navigateScreen('imtihon')}
-                onOpenAdmin={() => void openAdminWithAuth()}
+                readinessSummary={{
+                  lessonsDone: completedLessons.length,
+                  lessonsTotal: lessons.length,
+                  videosDone: watchedVideoCount,
+                  videosTotal: videoLessons.length,
+                  challengesDone: solvedChallenges.length,
+                  challengesTotal: PRACTICE_CHALLENGES.length,
+                }}
+                defaultStudentName={profileDisplayName || authUser?.displayName || ''}
+                onCreateCertificate={handleCreateStudentCertificate}
+                onGoToExam={(scope) => {
+                  if (scope === 'literacy' || scope === 'programming') {
+                    handleSelectTrack(scope);
+                  }
+                  navigateScreen('imtihon');
+                }}
               />
             )}
           </Suspense>
         </main>
 
-        {/* Clean Footer */}
-        <footer className="bg-slate-950 text-slate-400 border-t border-slate-800 py-7">
-          <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs">
-            <p>
-              © {new Date().getFullYear()} murodillayev_dev. Kompyuter savodxonligi va dasturlash
-              asoslari.
-            </p>
-            <div className="flex flex-wrap items-center justify-center gap-4 sm:gap-5">
-              <button
-                type="button"
-                onClick={() => handleSelectTrackAndGo('literacy', 'darslar')}
-                className="py-1 hover:text-white transition-colors cursor-pointer"
-              >
-                Savodxonlik
-              </button>
-              <button
-                type="button"
-                onClick={() => handleSelectTrackAndGo('programming', 'darslar')}
-                className="py-1 hover:text-white transition-colors cursor-pointer"
-              >
-                Dasturlash
-              </button>
-              <button
-                type="button"
-                onClick={() => navigateScreen('aiustoz')}
-                className="py-1 hover:text-white transition-colors cursor-pointer"
-              >
-                AI Ustoz
-              </button>
-              <button
-                type="button"
-                onClick={() => navigateScreen('sertifikat')}
-                className="py-1 hover:text-white transition-colors cursor-pointer"
-              >
-                Sertifikatlar
-              </button>
-              <button
-                type="button"
-                onClick={() => navigateScreen('imtihon')}
-                className="py-1 hover:text-white transition-colors cursor-pointer"
-              >
-                Imtihon
-              </button>
-              <button
-                type="button"
-                onClick={() => void openAdminWithAuth()}
-                className={`py-1 inline-flex items-center gap-1 transition-colors cursor-pointer ${
-                  isProg
-                    ? 'text-indigo-400 hover:text-indigo-300'
-                    : 'text-sky-400 hover:text-sky-300'
-                }`}
-              >
-                <Lock className="w-3 h-3" />
-                <span>Admin panel</span>
-              </button>
-            </div>
-          </div>
+        {/* Minimal Footer */}
+        <footer className="bg-slate-950 text-slate-500 border-t border-slate-800/80 py-4 text-center text-xs px-4">
+          <p>© {new Date().getFullYear()} BilimKod · murodillayev_dev</p>
         </footer>
       </div>
-
-      {/* Fixed Thumb-Zone Bottom Navigation Bar on Mobile */}
-      <MobileBottomNav
-        activeScreen={activeScreen}
-        activeTrack={activeTrack}
-        onSelectScreen={navigateScreen}
-      />
 
       {/* Login / Register Modal (only mounted when open to save RAM) */}
       {authModalOpen && (

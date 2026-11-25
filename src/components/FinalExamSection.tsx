@@ -3,18 +3,26 @@ import {
   AlertTriangle,
   Award,
   BookOpen,
+  Bot,
+  Camera,
   CheckCircle2,
   ChevronRight,
+  Clock,
   Code2,
   Layers,
   Lock,
   Monitor,
   RotateCcw,
-  ShieldCheck,
   User,
   XCircle,
 } from 'lucide-react';
-import type { ExamQuestion, LessonCategory } from '../data/curriculum';
+import type { CertificateRecord, ExamQuestion, LessonCategory } from '../data/curriculum';
+import {
+  formatRemainingCountdown,
+  formatUnlockClock,
+  isExamScopeLocked,
+} from '../utils/examCooldown';
+import { CertificateBuilderModal } from './CertificateBuilderModal';
 import { ConfettiCanvas } from './ConfettiCanvas';
 
 export type ExamScope = LessonCategory | 'all';
@@ -39,12 +47,27 @@ interface FinalExamSectionProps {
   questions: ExamQuestion[];
   activeTrack: LessonCategory;
   examAttempts: Record<ExamScope, number>;
+  examLockedUntil: Record<ExamScope, number>;
+  examResults?: ExamAttemptRecord[];
+  issuedCertificates?: CertificateRecord[];
+  defaultStudentName?: string;
+  readinessSummary?: {
+    lessonsDone: number;
+    lessonsTotal: number;
+    videosDone: number;
+    videosTotal: number;
+    challengesDone: number;
+    challengesTotal: number;
+  };
   maxAttempts?: number;
   onConsumeAttempt: (scope: ExamScope) => void;
+  onLockExam24h: (scope: ExamScope) => void;
   onRecordResult: (record: ExamAttemptRecord) => void;
+  onCreateCertificate?: (cert: CertificateRecord) => Promise<void> | void;
   onBackToLessons: () => void;
   onGoToChallenges?: () => void;
   onGoToCertificates?: () => void;
+  onOpenAdmin?: () => void;
 }
 
 interface AnswerRecord {
@@ -58,23 +81,47 @@ export function FinalExamSection({
   questions,
   activeTrack,
   examAttempts,
+  examLockedUntil,
+  examResults = [],
+  issuedCertificates = [],
+  defaultStudentName = '',
+  readinessSummary,
   maxAttempts = 3,
   onConsumeAttempt,
+  onLockExam24h,
   onRecordResult,
+  onCreateCertificate,
   onBackToLessons,
   onGoToChallenges,
   onGoToCertificates,
+  onOpenAdmin,
 }: FinalExamSectionProps) {
   const [examScope, setExamScope] = useState<ExamScope>(activeTrack);
   const [phase, setPhase] = useState<'intro' | 'active' | 'result'>('intro');
-  const [studentName, setStudentName] = useState('');
+  const [studentName, setStudentName] = useState(defaultStudentName);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [selectedOption, setSelectedOption] = useState<number | null>(null);
   const [answers, setAnswers] = useState<AnswerRecord[]>([]);
   const [showReview, setShowReview] = useState(false);
   const [activeScopeLocked, setActiveScopeLocked] = useState<ExamScope>(activeTrack);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const [lastAttemptRecord, setLastAttemptRecord] = useState<ExamAttemptRecord | null>(null);
+  const [certBuilderOpen, setCertBuilderOpen] = useState(false);
 
   const autoAdvanceTimerRef = useRef<number | null>(null);
+
+  const hasAnyActiveLock =
+    isExamScopeLocked(examLockedUntil.literacy, nowMs) ||
+    isExamScopeLocked(examLockedUntil.programming, nowMs) ||
+    isExamScopeLocked(examLockedUntil.all, nowMs);
+
+  useEffect(() => {
+    if (!hasAnyActiveLock) return;
+    const timer = window.setInterval(() => {
+      setNowMs(Date.now());
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [hasAnyActiveLock]);
 
   useEffect(() => {
     if (phase === 'intro') {
@@ -103,8 +150,14 @@ export function FinalExamSection({
   const litCount = questions.filter((q) => q.category === 'literacy').length;
   const progCount = questions.filter((q) => q.category === 'programming').length;
 
-  const usedAttemptsForScope = examAttempts[currentScope] ?? 0;
-  const remainingAttempts = Math.max(0, maxAttempts - usedAttemptsForScope);
+  const currentLockedUntil = examLockedUntil[currentScope] ?? 0;
+  const isCurrentScopeLocked = isExamScopeLocked(currentLockedUntil, nowMs);
+  const usedAttemptsForScope = isCurrentScopeLocked
+    ? maxAttempts
+    : (examAttempts[currentScope] ?? 0);
+  const remainingAttempts = isCurrentScopeLocked
+    ? 0
+    : Math.max(0, maxAttempts - usedAttemptsForScope);
 
   const getEvaluation = (points: number, total: number) => {
     const pct = total > 0 ? (points / total) * 100 : 0;
@@ -152,6 +205,9 @@ export function FinalExamSection({
       scopeToStart === 'all' ? questions : questions.filter((q) => q.category === scopeToStart);
     if (questionsForStart.length === 0) return;
 
+    const lockedUntil = examLockedUntil[scopeToStart] ?? 0;
+    if (isExamScopeLocked(lockedUntil, Date.now())) return;
+
     const used = examAttempts[scopeToStart] ?? 0;
     if (used >= maxAttempts) return;
 
@@ -178,9 +234,14 @@ export function FinalExamSection({
     const evalInfo = getEvaluation(finalScore, totalQuestions);
     const passed = evalInfo.tier !== 'retry';
 
-    onRecordResult({
+    if (!passed && (examAttempts[activeScopeLocked] ?? 0) >= maxAttempts) {
+      onLockExam24h(activeScopeLocked);
+      setNowMs(Date.now());
+    }
+
+    const record: ExamAttemptRecord = {
       id: `exam-${Date.now()}`,
-      studentName: studentName.trim() || 'Mehmon o‘quvchi',
+      studentName: studentName.trim() || defaultStudentName || 'Mehmon o‘quvchi',
       examScope: activeScopeLocked,
       score: finalScore,
       total: totalQuestions,
@@ -192,8 +253,10 @@ export function FinalExamSection({
       tier: evalInfo.tier,
       tierLabel: evalInfo.badgeText,
       completedAt: new Date().toISOString(),
-    });
+    };
 
+    setLastAttemptRecord(record);
+    onRecordResult(record);
     setPhase('result');
   };
 
@@ -247,8 +310,18 @@ export function FinalExamSection({
 
   const isProgTheme = currentScope === 'programming';
 
-  const scopeAttemptLeft = (scope: ExamScope) =>
-    Math.max(0, maxAttempts - (examAttempts[scope] ?? 0));
+  const scopeAttemptLeft = (scope: ExamScope) => {
+    if (isExamScopeLocked(examLockedUntil[scope], nowMs)) return 0;
+    return Math.max(0, maxAttempts - (examAttempts[scope] ?? 0));
+  };
+
+  const renderScopeFooterStatus = (scope: ExamScope) => {
+    const lockedUntil = examLockedUntil[scope] ?? 0;
+    if (isExamScopeLocked(lockedUntil, nowMs)) {
+      return `24s blok · ${formatRemainingCountdown(lockedUntil, nowMs)}`;
+    }
+    return `Imkoniyat: ${scopeAttemptLeft(scope)} / ${maxAttempts}`;
+  };
 
   return (
     <section
@@ -309,7 +382,7 @@ export function FinalExamSection({
                     scopeAttemptLeft('literacy') === 0 ? 'text-rose-400' : 'text-emerald-300'
                   }`}
                 >
-                  Imkoniyat: {scopeAttemptLeft('literacy')} / {maxAttempts}
+                  {renderScopeFooterStatus('literacy')}
                 </div>
               </button>
 
@@ -335,7 +408,7 @@ export function FinalExamSection({
                     scopeAttemptLeft('programming') === 0 ? 'text-rose-400' : 'text-emerald-300'
                   }`}
                 >
-                  Imkoniyat: {scopeAttemptLeft('programming')} / {maxAttempts}
+                  {renderScopeFooterStatus('programming')}
                 </div>
               </button>
 
@@ -363,48 +436,103 @@ export function FinalExamSection({
                     scopeAttemptLeft('all') === 0 ? 'text-rose-400' : 'text-emerald-300'
                   }`}
                 >
-                  Imkoniyat: {scopeAttemptLeft('all')} / {maxAttempts}
+                  {renderScopeFooterStatus('all')}
                 </div>
               </button>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 max-w-2xl mx-auto mb-7 text-left border-t border-b border-slate-700 py-4">
-              <div>
-                <div className="text-xl sm:text-2xl font-bold font-mono tabular-nums text-white">
-                  {totalQuestions} ta
+            {/* Pre-Exam Eligibility & Personal Results Check */}
+            {(() => {
+              const scopeHistory = examResults.filter((r) => r.examScope === examScope);
+              const bestAttempt = scopeHistory.reduce<ExamAttemptRecord | null>((best, curr) => {
+                if (!best) return curr;
+                const currPct = curr.total > 0 ? curr.score / curr.total : 0;
+                const bestPct = best.total > 0 ? best.score / best.total : 0;
+                return currPct > bestPct ? curr : best;
+              }, null);
+              const bestPct =
+                bestAttempt && bestAttempt.total > 0
+                  ? Math.round((bestAttempt.score / bestAttempt.total) * 100)
+                  : 0;
+
+              return (
+                <div className="max-w-2xl mx-auto mb-6 p-4 rounded-xl bg-slate-900/70 border border-slate-700 text-left space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-xs font-semibold text-slate-300">
+                      Imtihon ruxsati va natija tekshiruvi
+                    </span>
+                    <span
+                      className={`text-xs font-semibold ${
+                        isCurrentScopeLocked || remainingAttempts === 0
+                          ? 'text-rose-400'
+                          : 'text-emerald-400'
+                      }`}
+                    >
+                      {isCurrentScopeLocked
+                        ? '24 soatlik tanaffus'
+                        : remainingAttempts > 0
+                          ? 'Imtihonga ruxsat bor'
+                          : 'Imkoniyat tugagan'}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2 border-t border-slate-800">
+                    <div>
+                      <div className="text-[11px] text-slate-400">Savollar</div>
+                      <div className="text-base font-bold font-mono tabular-nums text-white">
+                        {totalQuestions} ta ({passThreshold})
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[11px] text-slate-400">Qolgan imkoniyat</div>
+                      <div
+                        className={`text-base font-bold font-mono tabular-nums ${
+                          remainingAttempts === 0 ? 'text-rose-400' : 'text-emerald-400'
+                        }`}
+                      >
+                        {remainingAttempts} / {maxAttempts}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[11px] text-slate-400">Eng yaxshi natija</div>
+                      <div className="text-base font-bold font-mono tabular-nums text-white">
+                        {bestAttempt ? `${bestAttempt.score}/${bestAttempt.total} (${bestPct}%)` : 'Yo‘q'}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[11px] text-slate-400">Tayyorgarlik</div>
+                      <div className="text-base font-bold font-mono tabular-nums text-white">
+                        {readinessSummary
+                          ? `${readinessSummary.lessonsDone}/${readinessSummary.lessonsTotal} dars`
+                          : `${scopeHistory.length} urinish`}
+                      </div>
+                    </div>
+                  </div>
+
+                  {onGoToCertificates && (
+                    <div className="pt-1 flex flex-wrap items-center justify-between gap-2 text-xs">
+                      <span className="text-slate-400">
+                        Kirishdan oldin barcha urinish va sertifikatlaringizni ko‘rishingiz mumkin.
+                      </span>
+                      <button
+                        type="button"
+                        onClick={onGoToCertificates}
+                        className="font-semibold text-sky-400 hover:text-sky-300 underline cursor-pointer"
+                      >
+                        Barcha natijalarimni tekshirish
+                      </button>
+                    </div>
+                  )}
                 </div>
-                <div className="text-xs text-slate-400 mt-0.5">Test savoli</div>
-              </div>
-              <div>
-                <div className="text-xl sm:text-2xl font-bold font-mono tabular-nums text-white">
-                  {passThreshold}
-                </div>
-                <div className="text-xs text-slate-400 mt-0.5">O‘tish bali (75%)</div>
-              </div>
-              <div>
-                <div
-                  className={`text-xl sm:text-2xl font-bold font-mono tabular-nums ${
-                    remainingAttempts === 0 ? 'text-rose-400' : 'text-emerald-400'
-                  }`}
-                >
-                  {remainingAttempts} / {maxAttempts}
-                </div>
-                <div className="text-xs text-slate-400 mt-0.5">Qolgan imkoniyat</div>
-              </div>
-              <div>
-                <div className="text-xl sm:text-2xl font-bold font-mono tabular-nums text-white">
-                  Qiyin
-                </div>
-                <div className="text-xs text-slate-400 mt-0.5">Savollar darajasi</div>
-              </div>
-            </div>
+              );
+            })()}
 
             <div className="max-w-sm mx-auto mb-6 text-left">
               <label
                 htmlFor="student-name-input"
                 className="block text-xs font-medium text-slate-300 mb-1.5"
               >
-                Ism va familiyangiz (Sertifikat va natijalar jurnali uchun)
+                Ism va familiyangiz
               </label>
               <div className="relative">
                 <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
@@ -423,22 +551,45 @@ export function FinalExamSection({
               <p className="text-sm text-amber-300">
                 Hozircha bu yo‘nalishda imtihon savollari mavjud emas.
               </p>
-            ) : remainingAttempts <= 0 ? (
+            ) : remainingAttempts <= 0 || isCurrentScopeLocked ? (
               <div className="max-w-lg mx-auto rounded-xl bg-rose-950/60 border border-rose-700 p-5 text-left space-y-3">
                 <div className="flex items-center gap-2 text-sm font-bold text-rose-300">
                   <Lock className="w-4 h-4 shrink-0" />
-                  <span>Bu yo‘nalish uchun 3 ta imkoniyat tugadi (0 / {maxAttempts})</span>
+                  <span>
+                    {isCurrentScopeLocked
+                      ? '3 marta yiqilganingiz sababli imtihon 24 soatdan keyin ochiladi'
+                      : `Bu yo‘nalish uchun 3 ta imkoniyat tugadi (0 / ${maxAttempts})`}
+                  </span>
                 </div>
+
+                {isCurrentScopeLocked && (
+                  <div className="p-3.5 rounded-lg bg-slate-950/70 border border-rose-800/70 flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2 text-xs text-rose-200">
+                      <Clock className="w-4 h-4 text-rose-400 shrink-0" />
+                      <div>
+                        <div className="font-semibold">Qayta ochilish vaqti</div>
+                        <div className="text-[11px] text-rose-300/80">
+                          {formatUnlockClock(currentLockedUntil)}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="text-lg sm:text-xl font-bold font-mono tabular-nums text-white">
+                      {formatRemainingCountdown(currentLockedUntil, nowMs)}
+                    </div>
+                  </div>
+                )}
+
                 <p className="text-xs sm:text-sm text-rose-100/90 leading-relaxed">
-                  Siz ushbu imtihondan maksimal {maxAttempts} marta foydalanib bo‘ldingiz.
-                  Bilimingizni mustahkamlash uchun darslar va amaliy masalalarga qayting yoki
-                  ustozdan (Admin panel orqali) qayta urinish ruxsatini so‘rang.
+                  {isCurrentScopeLocked
+                    ? 'Imtihondan 3 marta o‘ta olmaganingiz uchun tizim 24 soatlik tanaffus belgiladi. Bu vaqtda darslarni takrorlang — 24 soatdan keyin avtomatik ochiladi yoki ustoz Admin panel orqali hoziroq ochishi mumkin.'
+                    : `Siz ushbu imtihondan maksimal ${maxAttempts} marta foydalanib bo‘ldingiz. Bilimingizni mustahkamlash uchun darslar va amaliy masalalarga qayting yoki ustozdan (Admin panel orqali) qayta ochishni so‘rang.`}
                 </p>
+
                 <div className="flex flex-wrap gap-2.5 pt-1">
                   <button
                     type="button"
                     onClick={onBackToLessons}
-                    className="min-h-[40px] px-4 py-2 text-xs font-semibold text-white bg-slate-800 hover:bg-slate-700 rounded-lg cursor-pointer"
+                    className="min-h-[42px] px-4 py-2 text-xs font-semibold text-white bg-slate-800 hover:bg-slate-700 rounded-lg cursor-pointer"
                   >
                     Darslarni takrorlash
                   </button>
@@ -446,9 +597,19 @@ export function FinalExamSection({
                     <button
                       type="button"
                       onClick={onGoToChallenges}
-                      className="min-h-[40px] px-4 py-2 text-xs font-semibold text-slate-950 bg-amber-400 hover:bg-amber-300 rounded-lg cursor-pointer"
+                      className="min-h-[42px] px-4 py-2 text-xs font-semibold text-slate-950 bg-amber-400 hover:bg-amber-300 rounded-lg cursor-pointer"
                     >
                       Masalalarni yechish
+                    </button>
+                  )}
+                  {onOpenAdmin && (
+                    <button
+                      type="button"
+                      onClick={onOpenAdmin}
+                      className="min-h-[42px] inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-sky-200 bg-slate-900 border border-slate-700 hover:border-sky-400 rounded-lg cursor-pointer"
+                    >
+                      <Lock className="w-3.5 h-3.5" />
+                      <span>Admin orqali ochish</span>
                     </button>
                   )}
                 </div>
@@ -623,25 +784,45 @@ export function FinalExamSection({
               </p>
             </div>
 
-            {isPassed && (
-              <div className="mt-5 p-4 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div className="flex items-start gap-2.5 text-xs sm:text-sm text-emerald-900 dark:text-emerald-200">
-                  <ShieldCheck className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
-                  <span>
-                    Siz o‘tish balini muvaffaqiyatli to‘pladingiz! Endi{' '}
-                    <span className="font-semibold">Admin panel → Sertifikatlar</span> bo‘limidan
-                    rasmiy sertifikat chiqarish mumkin.
-                  </span>
+            {isPassed && lastAttemptRecord && (
+              <div className="mt-5 p-4 sm:p-5 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="space-y-1">
+                    <div className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700 dark:text-emerald-400">
+                      <Bot className="w-4 h-4 shrink-0" />
+                      <span>AI yordamchi orqali rasm sertifikat tayyor</span>
+                    </div>
+                    <p className="text-xs sm:text-sm text-emerald-950 dark:text-emerald-100">
+                      Ism-familiyangiz va rasmingizni yuklang — natijalaringiz bilan darhol rasmiy PNG
+                      sertifikat chiqariladi.
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setCertBuilderOpen(true)}
+                      className="min-h-[44px] inline-flex items-center gap-2 px-4 py-2.5 text-xs sm:text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-colors whitespace-nowrap cursor-pointer"
+                    >
+                      <Camera className="w-4 h-4 shrink-0" />
+                      <span>
+                        {issuedCertificates.some((c) => c.attemptId === lastAttemptRecord.id)
+                          ? 'Yangi rasm sertifikat chiqarish'
+                          : 'Hoziroq sertifikat chiqarish'}
+                      </span>
+                    </button>
+
+                    {onGoToCertificates && (
+                      <button
+                        type="button"
+                        onClick={onGoToCertificates}
+                        className="min-h-[44px] px-3.5 py-2.5 text-xs font-semibold text-emerald-800 dark:text-emerald-200 bg-white dark:bg-slate-900 border border-emerald-300 dark:border-emerald-700 rounded-xl whitespace-nowrap cursor-pointer"
+                      >
+                        Sertifikatlarim
+                      </button>
+                    )}
+                  </div>
                 </div>
-                {onGoToCertificates && (
-                  <button
-                    type="button"
-                    onClick={onGoToCertificates}
-                    className="min-h-[40px] px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg whitespace-nowrap shrink-0 cursor-pointer"
-                  >
-                    Sertifikatlar bo‘limi
-                  </button>
-                )}
               </div>
             )}
 
@@ -671,7 +852,7 @@ export function FinalExamSection({
 
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex flex-wrap items-center gap-3">
-                {remainingAttempts > 0 ? (
+                {remainingAttempts > 0 && !isCurrentScopeLocked ? (
                   <button
                     type="button"
                     onClick={() => startExam(activeScopeLocked)}
@@ -682,8 +863,12 @@ export function FinalExamSection({
                   </button>
                 ) : (
                   <span className="min-h-[44px] inline-flex items-center gap-2 px-4 py-2.5 text-xs font-semibold text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-800 rounded-lg">
-                    <Lock className="w-4 h-4 shrink-0" />
-                    <span>3 ta imkoniyat tugadi</span>
+                    <Clock className="w-4 h-4 shrink-0" />
+                    <span>
+                      {isCurrentScopeLocked
+                        ? `3 marta yiqildingiz · 24 soatdan keyin ochiladi (${formatRemainingCountdown(currentLockedUntil, nowMs)})`
+                        : '3 ta imkoniyat tugadi'}
+                    </span>
                   </span>
                 )}
 
@@ -762,6 +947,19 @@ export function FinalExamSection({
           </div>
         )}
       </div>
+
+      {certBuilderOpen && lastAttemptRecord && (
+        <CertificateBuilderModal
+          attempt={lastAttemptRecord}
+          defaultFullName={studentName || defaultStudentName}
+          onCertificateReady={async (cert) => {
+            if (onCreateCertificate) {
+              await onCreateCertificate(cert);
+            }
+          }}
+          onClose={() => setCertBuilderOpen(false)}
+        />
+      )}
     </section>
   );
 }

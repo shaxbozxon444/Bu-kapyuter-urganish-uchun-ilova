@@ -36,7 +36,15 @@ service cloud.firestore {
         && m.keys().hasOnly(['literacy', 'programming', 'all'])
         && m.literacy is int && m.literacy >= 0 && m.literacy <= 3
         && m.programming is int && m.programming >= 0 && m.programming <= 3
-        && m.all is int && m.all >= 0 && m.all <= 3;
+        && m.all is int && m.all <= 3 && m.all >= 0;
+    }
+    function isValidExamLocks(m) {
+      return m is map
+        && m.keys().hasAll(['literacy', 'programming', 'all'])
+        && m.keys().hasOnly(['literacy', 'programming', 'all'])
+        && m.literacy is int && m.literacy >= 0 && m.literacy <= 9999999999999
+        && m.programming is int && m.programming >= 0 && m.programming <= 9999999999999
+        && m.all is int && m.all >= 0 && m.all <= 9999999999999;
     }
 
     // 3. Entity Validation Blueprints
@@ -49,7 +57,7 @@ service cloud.firestore {
         && data.keys().hasOnly([
           'uid', 'displayName', 'email', 'role', 'activeTrack',
           'completedLessons', 'watchedVideos', 'solvedChallenges',
-          'examAttempts', 'createdAt', 'updatedAt'
+          'examAttempts', 'examLockedUntil', 'createdAt', 'updatedAt'
         ])
         && isValidId(data.uid)
         && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100
@@ -60,6 +68,7 @@ service cloud.firestore {
         && isStringList(data.watchedVideos, 100)
         && isStringList(data.solvedChallenges, 100)
         && isValidExamAttempts(data.examAttempts)
+        && (!('examLockedUntil' in data) || isValidExamLocks(data.examLockedUntil))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -100,7 +109,8 @@ service cloud.firestore {
         ])
         && data.keys().hasOnly([
           'id', 'userId', 'resultId', 'studentName', 'track', 'trackTitle',
-          'score', 'total', 'percentage', 'tierLabel', 'issuedAt', 'issuerName', 'createdAt'
+          'score', 'total', 'percentage', 'tierLabel', 'issuedAt', 'issuerName',
+          'aiNote', 'hasPhoto', 'createdAt'
         ])
         && isValidId(data.id)
         && isValidId(data.userId)
@@ -115,6 +125,8 @@ service cloud.firestore {
         && data.tierLabel is string && data.tierLabel.size() >= 1 && data.tierLabel.size() <= 200
         && data.issuedAt is string && data.issuedAt.size() >= 1 && data.issuedAt.size() <= 80
         && data.issuerName is string && data.issuerName.size() >= 1 && data.issuerName.size() <= 120
+        && (!('aiNote' in data) || (data.aiNote is string && data.aiNote.size() <= 400))
+        && (!('hasPhoto' in data) || data.hasPhoto is bool)
         && data.createdAt is timestamp;
     }
 
@@ -165,7 +177,8 @@ service cloud.firestore {
             && incoming().role == existing().role
             && incoming().diff(existing()).affectedKeys().hasOnly([
               'displayName', 'activeTrack', 'completedLessons',
-              'watchedVideos', 'solvedChallenges', 'examAttempts', 'updatedAt'
+              'watchedVideos', 'solvedChallenges', 'examAttempts',
+              'examLockedUntil', 'updatedAt'
             ])
           )
         );

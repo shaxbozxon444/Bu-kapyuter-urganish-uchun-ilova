@@ -107,7 +107,7 @@ function verifyAdminToken(token: string): boolean {
 }
 
 const SOCRATIC_SYSTEM_INSTRUCTION = `
-Sen "murodillayev_dev" ta'lim platformasining Sokratik AI Ustozisan (Kompyuter savodxonligi va Dasturlash asoslari bo'yicha mentor).
+Sen "BilimKod · murodillayev_dev" ta'lim platformasining Sokratik AI Ustozisan (Kompyuter savodxonligi va Dasturlash asoslari bo'yicha mentor).
 
 QAT'IY VA BUZILMAS QOIDALAR:
 1. HECH QACHON to'g'ri javobni, aniq sonni, test variantini (A, B, C yoki D) yoki tayyor yechim kodini TO'G'RIDAN-TO'G'RI AYTMA!
@@ -315,6 +315,93 @@ async function startServer() {
       }
       res.status(500).json({
         error: 'AI Ustoz bilan bog‘lanishda xatolik yuz berdi. Qayta urinib ko‘ring.',
+      });
+    }
+  });
+
+  // --- AI Certificate Helper Endpoint (Server-side @google/genai) ---
+  app.post('/api/ai-certificate-summary', async (req, res) => {
+    const apiKey = (process.env.GEMINI_API_KEY || '').trim();
+    if (!apiKey) {
+      res.status(503).json({
+        error:
+          'GEMINI_API_KEY sozlanmagan. AI xulosasi uchun Settings > Secrets bo‘limidan GEMINI_API_KEY qo‘shing.',
+      });
+      return;
+    }
+
+    const studentName =
+      typeof req.body?.studentName === 'string' ? req.body.studentName.trim().slice(0, 100) : '';
+    const trackTitle =
+      typeof req.body?.trackTitle === 'string' ? req.body.trackTitle.trim().slice(0, 120) : '';
+    const score = Number(req.body?.score ?? 0);
+    const total = Math.max(1, Number(req.body?.total ?? 20));
+    const percentage = Math.max(75, Math.min(100, Math.round((score / total) * 100)));
+    const literacyScore = Number(req.body?.literacyScore ?? 0);
+    const literacyTotal = Number(req.body?.literacyTotal ?? 0);
+    const programmingScore = Number(req.body?.programmingScore ?? 0);
+    const programmingTotal = Number(req.body?.programmingTotal ?? 0);
+
+    if (!studentName || !trackTitle || !Number.isFinite(score) || score < 0) {
+      res.status(400).json({ error: 'Sertifikat uchun ism va imtihon natijalari to‘liq emas.' });
+      return;
+    }
+
+    const prompt = [
+      `BilimKod · murodillayev_dev ta'lim platformasidan rasmiy sertifikat olgan o'quvchi uchun qisqa, professional O'zbek tilidagi tavsiya/tasdiq matnini yoz.`,
+      `O'quvchi: ${studentName}`,
+      `Yo'nalish: ${trackTitle}`,
+      `Umumiy natija: ${score}/${total} (${percentage}%)`,
+      literacyTotal > 0 ? `Savodxonlik qismi: ${literacyScore}/${literacyTotal}` : '',
+      programmingTotal > 0 ? `Dasturlash qismi: ${programmingScore}/${programmingTotal}` : '',
+      `Talab: Faqat 1-2 ta rasmiy, ilhomlantiruvchi gap yoz (maksimal 210 ta belgi). Qo'shtirnoq, emoji, sarlavha yoki markdown ishlatma.`,
+    ]
+      .filter(Boolean)
+      .join('\n');
+
+    try {
+      const ai = new GoogleGenAI({
+        apiKey,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          },
+        },
+      });
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-4-hydrogen',
+        contents: prompt,
+        config: {
+          systemInstruction:
+            "Sen rasmiy IT sertifikatlar uchun qisqa, savodli va aniq O'zbek tilidagi baholash xulosasini yozuvchi yordamchisan. Hech qanday emoji yoki belgi qo'shma.",
+        },
+      });
+
+      const summary = (response.text || '').replace(/\s+/g, ' ').trim().slice(0, 320);
+      if (!summary) {
+        res.status(502).json({ error: 'AI yordamchi sertifikat matnini yarata olmadi.' });
+        return;
+      }
+
+      res.json({ summary });
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : String(error);
+      console.error('AI Certificate Summary error:', errMsg);
+      if (errMsg.includes('403') || errMsg.includes('API_KEY_INVALID')) {
+        res.status(403).json({
+          error: 'Gemini API kaliti yaroqsiz. Settings > Secrets bo‘limini tekshiring.',
+        });
+        return;
+      }
+      if (errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED')) {
+        res.status(429).json({
+          error: 'AI so‘rovlar limiti vaqtincha to‘ldi. Bir ozdan keyin qayta urinib ko‘ring.',
+        });
+        return;
+      }
+      res.status(500).json({
+        error: 'AI sertifikat yordamchisi bilan bog‘lanishda xatolik yuz berdi.',
       });
     }
   });

@@ -55,11 +55,11 @@ export const DIRTY_DOZEN_CASES: DirtyPayloadCase[] = [
     payload: { score: 25, total: 20 },
   },
   {
-    name: '7. Exam attempts exceeding maximum boundary of 3',
+    name: '7. Exam attempts exceeding maximum boundary of 3 or negative cooldown lock',
     collection: 'users',
     operation: 'update',
     expected: 'PERMISSION_DENIED',
-    payload: { examAttempts: { literacy: 99, programming: 0, all: 0 } },
+    payload: { examAttempts: { literacy: 99, programming: 0, all: 0 }, examLockedUntil: { literacy: -1, programming: 0, all: 0 } },
   },
   {
     name: '8. Certificate creation below 75% passing threshold',

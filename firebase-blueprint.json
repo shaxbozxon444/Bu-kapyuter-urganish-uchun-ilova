@@ -45,6 +45,10 @@
           "type": "object",
           "description": "Exam attempt counts per scope (literacy, programming, all), max 3 each."
         },
+        "examLockedUntil": {
+          "type": "object",
+          "description": "Epoch millisecond timestamps per scope when a 24-hour cooldown lock expires (0 when unlocked)."
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time"
@@ -212,6 +216,14 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 120
+        },
+        "aiNote": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 400
+        },
+        "hasPhoto": {
+          "type": "boolean"
         },
         "createdAt": {
           "type": "string",

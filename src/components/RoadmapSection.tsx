@@ -117,7 +117,7 @@ export function RoadmapSection({
     },
     {
       num: '05',
-      title: 'Rasmiy murodillayev_dev sertifikatini olish',
+      title: 'Rasmiy BilimKod sertifikatini olish',
       desc: 'Imtihondan o‘tganingizdan so‘ng ustoz (Admin panel) orqali rasmiy sertifikatingiz chiqariladi va yuklab olishingiz mumkin bo‘ladi.',
       done: trackCert ? 1 : 0,
       total: 1,

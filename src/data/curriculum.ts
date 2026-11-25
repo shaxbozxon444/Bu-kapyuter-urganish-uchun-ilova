@@ -123,6 +123,9 @@ export interface CertificateRecord {
   gradeLabel: string;
   issuedAt: string;
   issuerName: string;
+  aiNote?: string;
+  hasPhoto?: boolean;
+  photoDataUrl?: string;
 }
 
 export const LESSONS: LessonItem[] = [

@@ -23,6 +23,7 @@ import type {
   VideoLessonItem,
 } from '../data/curriculum';
 import { db, handleFirestoreError, OperationType } from '../firebase';
+import { getCertMediaCache, saveCertMediaCache } from '../utils/certificateCanvas';
 
 export const ADMIN_EMAIL = 'shaxbozxon444@gmail.com';
 
@@ -40,6 +41,22 @@ export interface UserProfileDoc {
   watchedVideos: string[];
   solvedChallenges: string[];
   examAttempts: Record<ExamScope, number>;
+  examLockedUntil: Record<ExamScope, number>;
+}
+
+const MAX_LOCK_TS = 9999999999999;
+
+function sanitizeExamLocks(raw?: Partial<Record<ExamScope, unknown>>): Record<ExamScope, number> {
+  const clamp = (val: unknown) => {
+    const n = Math.trunc(Number(val ?? 0));
+    if (!Number.isFinite(n) || n <= 0) return 0;
+    return Math.min(MAX_LOCK_TS, n);
+  };
+  return {
+    literacy: clamp(raw?.literacy),
+    programming: clamp(raw?.programming),
+    all: clamp(raw?.all),
+  };
 }
 
 export interface PersistedExamResult extends ExamAttemptRecord {
@@ -60,6 +77,7 @@ export async function ensureUserProfile(
     watchedVideos: string[];
     solvedChallenges: string[];
     examAttempts: Record<ExamScope, number>;
+    examLockedUntil?: Record<ExamScope, number>;
   }
 ): Promise<UserProfileDoc> {
   const path = `users/${user.uid}`;
@@ -85,6 +103,7 @@ export async function ensureUserProfile(
           programming: Math.min(3, Math.max(0, Number(data.examAttempts?.programming ?? 0))),
           all: Math.min(3, Math.max(0, Number(data.examAttempts?.all ?? 0))),
         },
+        examLockedUntil: sanitizeExamLocks(data.examLockedUntil),
       };
     }
 
@@ -111,6 +130,7 @@ export async function ensureUserProfile(
         programming: Math.min(3, Math.max(0, initial.examAttempts.programming || 0)),
         all: Math.min(3, Math.max(0, initial.examAttempts.all || 0)),
       },
+      examLockedUntil: sanitizeExamLocks(initial.examLockedUntil),
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     };
@@ -127,6 +147,7 @@ export async function ensureUserProfile(
       watchedVideos: payload.watchedVideos,
       solvedChallenges: payload.solvedChallenges,
       examAttempts: payload.examAttempts,
+      examLockedUntil: payload.examLockedUntil,
     };
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
@@ -161,6 +182,7 @@ export function subscribeUserProfile(
           programming: Math.min(3, Math.max(0, Number(data.examAttempts?.programming ?? 0))),
           all: Math.min(3, Math.max(0, Number(data.examAttempts?.all ?? 0))),
         },
+        examLockedUntil: sanitizeExamLocks(data.examLockedUntil),
       });
     },
     (error) => {
@@ -179,6 +201,7 @@ export async function updateUserProgress(
     watchedVideos: string[];
     solvedChallenges: string[];
     examAttempts: Record<ExamScope, number>;
+    examLockedUntil: Record<ExamScope, number>;
   }>
 ): Promise<void> {
   const path = `users/${uid}`;
@@ -208,10 +231,71 @@ export async function updateUserProgress(
         all: Math.min(3, Math.max(0, patch.examAttempts.all || 0)),
       };
     }
+    if (patch.examLockedUntil) {
+      cleanPatch.examLockedUntil = sanitizeExamLocks(patch.examLockedUntil);
+    }
     await updateDoc(doc(db, 'users', uid), cleanPatch);
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
   }
+}
+
+export function subscribeAllUsersForAdmin(
+  onData: (users: UserProfileDoc[]) => void
+): Unsubscribe {
+  const path = 'users';
+  return onSnapshot(
+    collection(db, 'users'),
+    (snapshot) => {
+      const items: UserProfileDoc[] = snapshot.docs.map((d) => {
+        const data = d.data() as Partial<UserProfileDoc>;
+        return {
+          uid: String(data.uid || d.id),
+          displayName:
+            typeof data.displayName === 'string' && data.displayName.trim()
+              ? data.displayName
+              : 'O‘quvchi',
+          email: typeof data.email === 'string' ? data.email : '',
+          role: data.role === 'admin' ? 'admin' : 'student',
+          activeTrack: data.activeTrack === 'programming' ? 'programming' : 'literacy',
+          completedLessons: Array.isArray(data.completedLessons)
+            ? data.completedLessons.slice(0, 100)
+            : [],
+          watchedVideos: Array.isArray(data.watchedVideos) ? data.watchedVideos.slice(0, 100) : [],
+          solvedChallenges: Array.isArray(data.solvedChallenges)
+            ? data.solvedChallenges.slice(0, 100)
+            : [],
+          examAttempts: {
+            literacy: Math.min(3, Math.max(0, Number(data.examAttempts?.literacy ?? 0))),
+            programming: Math.min(3, Math.max(0, Number(data.examAttempts?.programming ?? 0))),
+            all: Math.min(3, Math.max(0, Number(data.examAttempts?.all ?? 0))),
+          },
+          examLockedUntil: sanitizeExamLocks(data.examLockedUntil),
+        };
+      });
+      onData(items);
+    },
+    (error) => {
+      handleFirestoreError(error, OperationType.LIST, path);
+    }
+  );
+}
+
+export async function adminUnlockUserExam(
+  targetUser: UserProfileDoc,
+  scope?: ExamScope
+): Promise<void> {
+  const nextAttempts: Record<ExamScope, number> = !scope
+    ? { literacy: 0, programming: 0, all: 0 }
+    : { ...targetUser.examAttempts, [scope]: 0 };
+  const nextLocks: Record<ExamScope, number> = !scope
+    ? { literacy: 0, programming: 0, all: 0 }
+    : { ...targetUser.examLockedUntil, [scope]: 0 };
+
+  await updateUserProgress(targetUser.uid, {
+    examAttempts: nextAttempts,
+    examLockedUntil: nextLocks,
+  });
 }
 
 export async function saveExamResultDoc(uid: string, record: ExamAttemptRecord): Promise<void> {
@@ -274,8 +358,14 @@ export async function saveCertificateDoc(
   const safeId = cert.id.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128);
   const safeResultId = (resultId || cert.attemptId).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128);
   const path = `certificates/${safeId}`;
+  if (cert.photoDataUrl || cert.aiNote) {
+    saveCertMediaCache(safeId, {
+      photoDataUrl: cert.photoDataUrl,
+      aiNote: cert.aiNote,
+    });
+  }
   try {
-    await setDoc(doc(db, 'certificates', safeId), {
+    const payload: Record<string, unknown> = {
       id: safeId,
       userId,
       resultId: safeResultId,
@@ -289,7 +379,14 @@ export async function saveCertificateDoc(
       issuedAt: cert.issuedAt.slice(0, 80),
       issuerName: cert.issuerName.slice(0, 120),
       createdAt: serverTimestamp(),
-    });
+    };
+    if (typeof cert.aiNote === 'string' && cert.aiNote.trim()) {
+      payload.aiNote = cert.aiNote.trim().slice(0, 400);
+    }
+    if (typeof cert.hasPhoto === 'boolean' || Boolean(cert.photoDataUrl)) {
+      payload.hasPhoto = Boolean(cert.hasPhoto || cert.photoDataUrl);
+    }
+    await setDoc(doc(db, 'certificates', safeId), payload);
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
   }
@@ -320,8 +417,10 @@ export function subscribeCertificates(
     (snapshot) => {
       const items = snapshot.docs.map((d) => {
         const raw = d.data() as Record<string, unknown>;
+        const certId = String(raw.id || d.id);
+        const cached = getCertMediaCache(certId);
         return {
-          id: String(raw.id || d.id),
+          id: certId,
           attemptId: String(raw.resultId || raw.attemptId || ''),
           userId: typeof raw.userId === 'string' ? raw.userId : undefined,
           resultId: typeof raw.resultId === 'string' ? raw.resultId : undefined,
@@ -338,7 +437,10 @@ export function subscribeCertificates(
           percentage: Number(raw.percentage || 0),
           gradeLabel: String(raw.tierLabel || raw.gradeLabel || ''),
           issuedAt: String(raw.issuedAt || ''),
-          issuerName: String(raw.issuerName || 'murodillayev_dev'),
+          issuerName: String(raw.issuerName || 'BilimKod · murodillayev_dev'),
+          aiNote: typeof raw.aiNote === 'string' ? raw.aiNote : cached?.aiNote,
+          hasPhoto: Boolean(raw.hasPhoto || cached?.photoDataUrl),
+          photoDataUrl: cached?.photoDataUrl,
         } satisfies PersistedCertificate;
       });
       onData(items);
